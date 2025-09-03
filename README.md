@@ -1,4 +1,4 @@
- 3-Tier Student Registration Web Application
+3-Tier Student Registration Web Application
 This project is a classic 3-tier web application designed for student registration. It demonstrates a full-stack development workflow, including a frontend interface, a backend API, a relational database, automated testing, and observability with logging and tracing.
 
 Architecture
