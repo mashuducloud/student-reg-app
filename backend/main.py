@@ -58,6 +58,11 @@ def create_db_connection():
         log.error(f"Database connection failed: {e}", extra={"db.error": str(e)})
     return connection
 
+# --- Health Check Endpoint ---
+@app.route("/")
+def home():
+    return "Student Registration API is running 🚀"
+
 # --- API Endpoint for Student Registration ---
 @app.route('/register', methods=['POST'])
 def register_student():
