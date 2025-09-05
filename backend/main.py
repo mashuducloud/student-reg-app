@@ -53,7 +53,7 @@ def create_db_connection():
     try:
         connection = mysql.connector.connect(**DB_CONFIG)
         if connection.is_connected():
-            log.info("✅ Successfully connected to the database", extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]})
+            log.info("Successfully connected to the database", extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]})
     except Error as e:
         log.error(f"Database connection failed: {e}", extra={"db.error": str(e)})
     return connection
