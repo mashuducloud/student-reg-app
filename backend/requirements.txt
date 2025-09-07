@@ -6,6 +6,7 @@ colorama==0.4.6
 Flask==3.1.2
 flask-cors==6.0.1
 googleapis-common-protos==1.70.0
+grpcio==1.74.0
 idna==3.10
 importlib_metadata==8.7.0
 iniconfig==2.1.0
@@ -14,7 +15,9 @@ Jinja2==3.1.6
 MarkupSafe==3.0.2
 mysql-connector-python==9.4.0
 opentelemetry-api==1.36.0
+opentelemetry-exporter-otlp==1.36.0
 opentelemetry-exporter-otlp-proto-common==1.36.0
+opentelemetry-exporter-otlp-proto-grpc==1.36.0
 opentelemetry-exporter-otlp-proto-http==1.36.0
 opentelemetry-proto==1.36.0
 opentelemetry-sdk==1.36.0
