@@ -85,7 +85,11 @@
             try {
                 // The URL of the backend API endpoint.
                 // This assumes the Flask server is running on localhost:5000.
-                const apiUrl = 'http://localhost:5000/register';
+                //const apiUrl = 'http://localhost:5000/register';
+                
+                const apiUrl = window.location.hostname === "localhost"
+                    ? "http://localhost:5000/register"
+                    : "http://student-app:5000/register";
 
                 // Make a POST request to the backend API using the fetch() function
                 const response = await fetch(apiUrl, {
