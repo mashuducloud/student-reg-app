@@ -1,0 +1,87 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: student-app
+    depends_on:
+      - mysql-db
+      - otel-collector
+    ports:
+      - "5000:5000"   # Flask API
+      - "9100:9100"   # Prometheus metrics
+    env_file:
+      - ../.env   # Load environment variables
+    networks:
+      - observability-network
+
+  mysql-db:
+    image: mysql:8.0
+    container_name: mysql-db
+    restart: always
+    env_file:
+      - ../.env   # DB_NAME and DB_PASSWORD from .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-Barcelona@1819}
+      MYSQL_DATABASE: ${DB_NAME:-student_registration_db}
+    ports:
+      - "3307:3306"
+    networks:
+      - observability-network
+    volumes:
+      # Auto-run schema.sql at startup
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "43171:4317"   # OTLP gRPC
+      - "43181:4318"   # OTLP HTTP
+    restart: always
+    networks:
+      - observability-network
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: infra-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3201:3200"   # Tempo UI
+    restart: always
+    networks:
+      - observability-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: infra-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"   # Prometheus UI
+    restart: always
+    networks:
+      - observability-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: infra-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3300:3000"   # Grafana UI
+    restart: always
+    networks:
+      - observability-network
+
+networks:
+  observability-network:
+    driver: bridge
