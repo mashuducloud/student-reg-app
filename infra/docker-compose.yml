@@ -31,7 +31,7 @@ services:
     volumes:
       # Auto-run schema.sql at startup
       - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
-
+      
   frontend:
     build:
       context: ../frontend   # path to folder with index.html and Dockerfile
