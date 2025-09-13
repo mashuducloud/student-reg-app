@@ -94,6 +94,25 @@ services:
     networks:
       - observability-network
 
+  tests:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: student-api-tests
+    command: pytest --cov=main --cov-report=term-missing test_app.py -v
+    depends_on:
+      - mysql-db
+    env_file:
+      - ../.env
+    environment:
+      DB_HOST: mysql-db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-student_registration_db}
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD:-Barcelona@1819}
+    networks:
+      - observability-network
+
 networks:
   observability-network:
     driver: bridge

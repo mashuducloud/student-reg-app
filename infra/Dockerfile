@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y gcc libmariadb-dev libmariadb-dev-compa
 
 
 # Copy requirements from backend and install dependencies
-COPY backend/requirements.txt .
+COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code
