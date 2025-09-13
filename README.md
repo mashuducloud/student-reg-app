@@ -630,11 +630,480 @@ Save this JSON as student-registration-dashboard.json and import in Grafana:
 
 Run backend tests:
 
-cd backend
-pytest test_app.py
+Great 👍 — let’s expand the test suite so create_db_connection() is covered for both success and failure cases.
+
+Here’s the improved test_main.py with an extra negative test:
+
+import pytest
+import json
+from main import app, create_db_connection
 
 
-⚠️ Note: Tests expect {status, message} but backend currently returns {message} only.
+@pytest.fixture
+def client():
+    """Flask test client fixture"""
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        yield client
+
+
+def test_home(client):
+    """Test home endpoint returns 200"""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Student Registration API is running" in response.data
+
+
+def test_register_missing_fields(client):
+    """Test /register endpoint with missing data"""
+    response = client.post(
+        "/register",
+        data=json.dumps({"first_name": "John"}),  # missing last_name, email
+        content_type="application/json"
+    )
+    assert response.status_code == 400
+    assert b"required" in response.data
+
+
+def test_register_success(monkeypatch, client):
+    """Test /register endpoint with valid data (DB mocked)"""
+
+    # mock DB connection and cursor
+    class DummyCursor:
+        def execute(self, *args, **kwargs): pass
+        def close(self): pass
+
+    class DummyConnection:
+        def cursor(self): return DummyCursor()
+        def commit(self): pass
+        def close(self): pass
+        def is_connected(self): return True
+
+    monkeypatch.setattr("main.create_db_connection", lambda: DummyConnection())
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Jane",
+            "last_name": "Doe",
+            "email": "jane.doe@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 201
+    assert b"Student registered successfully" in response.data
+
+
+def test_create_db_connection_success(monkeypatch):
+    """Directly test create_db_connection() when connection succeeds"""
+
+    class DummyConnection:
+        def is_connected(self): return True
+
+    class DummyConnector:
+        @staticmethod
+        def connect(**kwargs): return DummyConnection()
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", DummyConnector)
+
+    conn = create_db_connection()
+    assert conn is not None
+    assert conn.is_connected()
+
+
+def test_create_db_connection_failure(monkeypatch):
+    """Directly test create_db_connection() when connection fails"""
+
+    class DummyError(Exception):
+        pass
+
+    class FailingConnector:
+        @staticmethod
+        def connect(**kwargs): 
+            raise DummyError("DB connection failed")
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", FailingConnector)
+
+    conn = create_db_connection()
+    assert conn is None  # should gracefully handle failure
+
+🔧 What’s new
+
+test_create_db_connection_success
+✅ Ensures the happy path works with a fake connection.
+
+test_create_db_connection_failure
+✅ Simulates mysql.connector.connect throwing an exception → your function should return None.
+
+This way, both OK and ERROR paths are covered.
+
+🚀 Run the tests
+pytest -v
+
+
+You should now see 5 tests passing:
+
+test_home
+
+test_register_missing_fields
+
+test_register_success
+
+test_create_db_connection_success
+
+test_create_db_connection_failure
+
+👉 Do you also want me to extend the /register endpoint test to cover the case where create_db_connection() fails (so it returns a 500 error)? That would give you full request-level coverage for DB failures too.
+
+You said:
+yes
+ChatGPT said:
+
+Perfect ✅ — let’s add one more test case that simulates a DB connection failure inside the /register endpoint, so we cover the full error path.
+
+Here’s your updated test_main.py:
+
+import pytest
+import json
+from main import app, create_db_connection
+
+
+@pytest.fixture
+def client():
+    """Flask test client fixture"""
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        yield client
+
+
+def test_home(client):
+    """Test home endpoint returns 200"""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Student Registration API is running" in response.data
+
+
+def test_register_missing_fields(client):
+    """Test /register endpoint with missing data"""
+    response = client.post(
+        "/register",
+        data=json.dumps({"first_name": "John"}),  # missing last_name, email
+        content_type="application/json"
+    )
+    assert response.status_code == 400
+    assert b"required" in response.data
+
+
+def test_register_success(monkeypatch, client):
+    """Test /register endpoint with valid data (DB mocked)"""
+
+    # mock DB connection and cursor
+    class DummyCursor:
+        def execute(self, *args, **kwargs): pass
+        def close(self): pass
+
+    class DummyConnection:
+        def cursor(self): return DummyCursor()
+        def commit(self): pass
+        def close(self): pass
+        def is_connected(self): return True
+
+    monkeypatch.setattr("main.create_db_connection", lambda: DummyConnection())
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Jane",
+            "last_name": "Doe",
+            "email": "jane.doe@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 201
+    assert b"Student registered successfully" in response.data
+
+
+def test_register_db_failure(monkeypatch, client):
+    """Test /register endpoint when DB connection fails"""
+
+    # Simulate DB connection failure
+    monkeypatch.setattr("main.create_db_connection", lambda: None)
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Fail",
+            "last_name": "Case",
+            "email": "fail@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 500
+    assert b"Failed to register student" in response.data
+
+
+def test_create_db_connection_success(monkeypatch):
+    """Directly test create_db_connection() when connection succeeds"""
+
+    class DummyConnection:
+        def is_connected(self): return True
+
+    class DummyConnector:
+        @staticmethod
+        def connect(**kwargs): return DummyConnection()
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", DummyConnector)
+
+    conn = create_db_connection()
+    assert conn is not None
+    assert conn.is_connected()
+
+
+def test_create_db_connection_failure(monkeypatch):
+    """Directly test create_db_connection() when connection fails"""
+
+    class DummyError(Exception):
+        pass
+
+    class FailingConnector:
+        @staticmethod
+        def connect(**kwargs):
+            raise DummyError("DB connection failed")
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", FailingConnector)
+
+    conn = create_db_connection()
+    assert conn is None  # should gracefully handle failure
+
+🔧 What’s new
+
+test_register_db_failure
+
+Monkeypatches create_db_connection to return None.
+
+Calls /register with valid input.
+
+Expects a 500 Internal Server Error with "Failed to register student" message.
+
+🚀 Run
+pytest -v
+
+
+You should now see 6 tests pass:
+
+test_home
+
+test_register_missing_fields
+
+test_register_success
+
+test_register_db_failure
+
+test_create_db_connection_success
+
+test_create_db_connection_failure
+
+👉 Do you also want me to help you add code coverage reporting (with pytest-cov) so your CI/CD pipeline can fail if coverage drops below a threshold? That’s a common next step.
+
+You said:
+yes
+ChatGPT said:
+
+Perfect 🚀 — adding coverage reporting is a great next step for CI/CD. With pytest-cov, you can measure how much of your main.py is exercised by your tests and even enforce a minimum coverage threshold.
+
+🔧 Step 1: Add pytest-cov to dependencies
+
+Since your requirements.txt already has pytest, add this line:
+
+pytest-cov==5.0.0
+
+
+(or latest stable version).
+
+🔧 Step 2: Run tests with coverage
+
+From your project root, run:
+
+pytest --cov=main --cov-report=term-missing -v
+
+
+Explanation:
+
+--cov=main → measure coverage for main.py.
+
+--cov-report=term-missing → shows which lines are not covered.
+
+-v → verbose output.
+
+Example output:
+
+---------- coverage: platform linux, python 3.11 ----------
+Name     Stmts   Miss  Cover   Missing
+--------------------------------------
+main.py    150      5    97%   88-93, 140
+
+🔧 Step 3: Enforce a minimum threshold
+
+Add --cov-fail-under=90 (for example) so the test run fails if coverage drops below 90%:
+
+pytest --cov=main --cov-report=term-missing --cov-fail-under=90 -v
+
+🔧 Step 4: Add to CI/CD (GitHub Actions example)
+
+Update your .github/workflows/tests.yml:
+
+name: CI Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        run: pytest --cov=main --cov-report=term-missing --cov-fail-under=90 -v
+
+
+This way:
+
+Every push/PR runs tests.
+
+If coverage < 90%, the pipeline fails.
+
+Developers must add tests before merging 🚀.
+
+🔧 Optional Step 5: Generate HTML report
+
+For local debugging, you can also generate an HTML coverage report:
+
+pytest --cov=main --cov-report=html
+
+
+Then open htmlcov/index.html in a browser.
+
+✅ With this setup, your tests not only validate functionality but also guard against untested code sneaking in.
+
+👉 Do you want me to also help you Dockerize the test run with coverage (so your CI/CD runs pytest-cov inside the same Docker image you deploy)?
+
+You said:
+yes
+ChatGPT said:
+
+Nice 🚀 — let’s make sure your tests + coverage run inside Docker, so your CI/CD pipeline tests the exact same environment you deploy.
+
+🔧 Step 1: Update your Dockerfile
+
+Right now, your container probably just runs main.py. We’ll make it flexible so you can run either the app or tests.
+
+Here’s a refactored Dockerfile:
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Add code
+COPY . .
+
+# Default command runs the app
+CMD ["python", "main.py"]
+
+
+Since pytest + pytest-cov are in requirements.txt, the container can run tests too.
+
+🔧 Step 2: Run tests with coverage inside Docker (locally)
+
+Build the image:
+
+docker build -t student-api .
+
+
+Run tests with coverage:
+
+docker run --rm student-api pytest --cov=main --cov-report=term-missing --cov-fail-under=90 -v
+
+
+Run app normally:
+
+docker run -p 5000:5000 student-api
+
+🔧 Step 3: GitHub Actions Workflow
+
+Here’s an updated .github/workflows/tests.yml that uses Docker:
+
+name: CI Tests (Dockerized)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build Docker image
+        run: docker build -t student-api .
+
+      - name: Run pytest with coverage inside Docker
+        run: docker run --rm student-api pytest --cov=main --cov-report=term-missing --cov-fail-under=90 -v
+
+🔧 Step 4: Optional — Generate HTML coverage report artifact
+
+If you want CI to keep a browsable coverage report, add:
+
+      - name: Run pytest with coverage + HTML report
+        run: docker run --rm -v ${{ github.workspace }}/coverage:/coverage student-api \
+          pytest --cov=main --cov-report=html:/coverage --cov-fail-under=90 -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage
+
+
+This will let you download and view coverage reports from GitHub Actions.
+
+✅ Summary:
+
+pytest-cov is installed inside Docker (from requirements.txt).
+
+You can run tests inside the container (docker run student-api pytest ...).
+
+CI/CD builds the Docker image and executes tests in that environment.
+
+Optional HTML reports give you full visibility into coverage.
+
+👉 Do you want me to also set up multi-stage Docker builds (so tests run in one stage and your final image stays lightweight without pytest)? This is common for production deployments.
+
 
 ⚠️ Notes
 
