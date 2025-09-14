@@ -114,12 +114,17 @@ def create_db_connection():
                 span.set_attribute("db.user", DB_CONFIG["user"])
                 span.set_attribute("db.name", DB_CONFIG["database"])
                 span.set_attribute("net.peer.name", DB_CONFIG["host"])
-                log.info("Connected to DB", extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]})
-        except Error as e:
+                log.info(
+                    "Connected to DB",
+                    extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]}
+                )
+        except Exception as e:  # 👈 catch ALL exceptions
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
             log.error(f"Database connection failed: {e}", extra={"db.error": str(e)})
+            connection = None   # 👈 ensure None is returned on failure
     return connection
+
 
 # --- Endpoints ---
 @app.route("/")
@@ -175,4 +180,4 @@ def register_student():
 
 # --- Run Flask App ---
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)
+    app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False) 

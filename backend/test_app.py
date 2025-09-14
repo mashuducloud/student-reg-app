@@ -32,16 +32,25 @@ def test_register_missing_fields(client):
 def test_register_success(monkeypatch, client):
     """Test /register endpoint with valid data (DB mocked)"""
 
-    # mock DB connection and cursor
     class DummyCursor:
-        def execute(self, *args, **kwargs): pass
-        def close(self): pass
+        def execute(self, *_args, **_):
+            pass
+
+        def close(self):
+            pass
 
     class DummyConnection:
-        def cursor(self): return DummyCursor()
-        def commit(self): pass
-        def close(self): pass
-        def is_connected(self): return True
+        def cursor(self):
+            return DummyCursor()
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def is_connected(self):
+            return True
 
     monkeypatch.setattr("main.create_db_connection", lambda: DummyConnection())
 
@@ -59,20 +68,56 @@ def test_register_success(monkeypatch, client):
     assert b"Student registered successfully" in response.data
 
 
-def test_create_db_connection(monkeypatch):
-    """Directly test create_db_connection() with mocked mysql.connector"""
+def test_register_db_failure(monkeypatch, client):
+    """Test /register endpoint when DB connection fails"""
+
+    # Force create_db_connection() to return None
+    monkeypatch.setattr("main.create_db_connection", lambda: None)
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Fail",
+            "last_name": "Case",
+            "email": "fail@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 500
+    assert b"Failed to register student" in response.data
+
+
+def test_create_db_connection_success(monkeypatch):
+    """Directly test create_db_connection() success"""
 
     class DummyConnection:
-        def is_connected(self): return True
+        def is_connected(self):
+            return True
 
     class DummyConnector:
         @staticmethod
-        def connect(**kwargs): return DummyConnection()
+        def connect(**_):
+            return DummyConnection()
 
-    # Patch mysql.connector inside main.py
     import main
     monkeypatch.setattr(main.mysql, "connector", DummyConnector)
 
     conn = create_db_connection()
     assert conn is not None
     assert conn.is_connected()
+
+
+def test_create_db_connection_failure(monkeypatch):
+    """Directly test create_db_connection() failure"""
+
+    class DummyConnector:
+        @staticmethod
+        def connect(**_):
+            raise Exception("DB connection failed")
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", DummyConnector)
+
+    conn = create_db_connection()
+    assert conn is None

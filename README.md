@@ -496,7 +496,7 @@ OpenTelemetry → OTEL Collector → Prometheus & Tempo → Grafana.
 student-registration-app/
 ├── backend/
 │   ├── config.py                   # DB + environment configuration
-│   ├── main.py                     # Flask app with logging, tracing, metrics
+│   ├── main.py                     # Flask app with logging, tracing,metrics
 │   ├── test_app.py                 # Pytest API tests
 │   └── requirements.txt            # Python dependencies
 │
@@ -507,7 +507,7 @@ student-registration-app/
 │   └── index.html                  # Tailwind CSS frontend
 │
 ├── infra/
-│   ├── docker-compose.yml          # Orchestrates frontend, backend, DB, observability
+│   ├── docker-compose.yml          # Orchestrates frontend, backend, DB observability
 │   ├── Dockerfile.frontend         # Nginx Dockerfile for frontend
 │   ├── otel-collector-config.yaml  # OTEL Collector config
 │   ├── prometheus.yml              # Prometheus scrape config
@@ -1104,7 +1104,228 @@ Optional HTML reports give you full visibility into coverage.
 
 👉 Do you want me to also set up multi-stage Docker builds (so tests run in one stage and your final image stays lightweight without pytest)? This is common for production deployments.
 
+✅ Final test_main.py (clean + full coverage)
+import pytest
+import json
+from main import app, create_db_connection
 
+
+@pytest.fixture
+def client():
+    """Flask test client fixture"""
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        yield client
+
+
+def test_home(client):
+    """Test home endpoint returns 200"""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Student Registration API is running" in response.data
+
+
+def test_register_missing_fields(client):
+    """Test /register endpoint with missing data"""
+    response = client.post(
+        "/register",
+        data=json.dumps({"first_name": "John"}),  # missing last_name, email
+        content_type="application/json"
+    )
+    assert response.status_code == 400
+    assert b"required" in response.data
+
+
+def test_register_success(monkeypatch, client):
+    """Test /register endpoint with valid data (DB mocked)"""
+
+    class DummyCursor:
+        def execute(self, *_args, **_):
+            pass
+
+        def close(self):
+            pass
+
+    class DummyConnection:
+        def cursor(self):
+            return DummyCursor()
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def is_connected(self):
+            return True
+
+    monkeypatch.setattr("main.create_db_connection", lambda: DummyConnection())
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Jane",
+            "last_name": "Doe",
+            "email": "jane.doe@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 201
+    assert b"Student registered successfully" in response.data
+
+
+def test_register_db_failure(monkeypatch, client):
+    """Test /register endpoint when DB connection fails"""
+
+    # Force create_db_connection() to return None
+    monkeypatch.setattr("main.create_db_connection", lambda: None)
+
+    response = client.post(
+        "/register",
+        data=json.dumps({
+            "first_name": "Fail",
+            "last_name": "Case",
+            "email": "fail@example.com"
+        }),
+        content_type="application/json"
+    )
+
+    assert response.status_code == 500
+    assert b"Failed to register student" in response.data
+
+
+def test_create_db_connection_success(monkeypatch):
+    """Directly test create_db_connection() success"""
+
+    class DummyConnection:
+        def is_connected(self):
+            return True
+
+    class DummyConnector:
+        @staticmethod
+        def connect(**_):
+            return DummyConnection()
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", DummyConnector)
+
+    conn = create_db_connection()
+    assert conn is not None
+    assert conn.is_connected()
+
+
+def test_create_db_connection_failure(monkeypatch):
+    """Directly test create_db_connection() failure"""
+
+    class DummyConnector:
+        @staticmethod
+        def connect(**_):
+            raise Exception("DB connection failed")
+
+    import main
+    monkeypatch.setattr(main.mysql, "connector", DummyConnector)
+
+    conn = create_db_connection()
+    assert conn is None
+
+🔧 What’s new
+
+test_register_db_failure → ensures /register returns 500 when DB connection fails.
+
+test_create_db_connection_failure → ensures create_db_connection() returns None when connector raises an exception.
+
+Still Pylance-clean (all unused args replaced with _).
+
+✅ Now you’ve got:
+
+Success + failure coverage for both DB connection and endpoint.
+
+Tests for home, missing fields, valid register, DB failure register.
+
+CI/CD ready with pytest-cov for coverage enforcement.
+
+👉 Do you want me to also add coverage badges (like a % coverage badge in your README) so your repo shows test coverage at a glance?
+
+You said:
+yes
+ChatGPT said:
+
+Perfect 🚀 — adding a coverage badge to your repo makes it super clear to everyone how well your code is tested. There are two common ways: via GitHub Actions + Shields.io (free + simple) or via Codecov (more detailed reports, free tier).
+
+🔧 Option 1: Shields.io badge (quick & simple)
+
+Make sure your GitHub Actions workflow runs pytest-cov with an XML report:
+
+- name: Run tests with coverage
+  run: pytest --cov=main --cov-report=xml --cov-fail-under=90 -v
+
+
+This will generate a coverage.xml.
+
+Add a badge using Shields.io
+. Example for a static badge:
+
+![coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)
+
+
+⚠️ Downside: you must update the percentage manually.
+
+🔧 Option 2: GitHub Actions + Codecov (auto-updating badge ✅)
+
+Add Codecov to your workflow:
+Create .github/workflows/tests.yml (or update your existing one):
+
+name: CI Tests with Coverage
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        run: pytest --cov=main --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+
+
+Sign up at https://codecov.io
+, add your repo, and grab the CODECOV_TOKEN.
+Store it in your GitHub repo secrets (Settings > Secrets > Actions > New repository secret).
+
+Add a badge to your README.md:
+
+[![codecov](https://codecov.io/gh/YOUR_GITHUB_USERNAME/student-registration-app/branch/main/graph/badge.svg)](https://codecov.io/gh/YOUR_GITHUB_USERNAME/student-registration-app)
+
+
+This badge updates automatically after every CI run.
+
+✅ Recommendation
+
+If you just want something quick → Shields.io static badge.
+
+If you want real-time, auto-updating coverage tracking → go with Codecov.
+
+👉 Do you want me to set this up for you using Codecov, and write the updated GitHub Actions YAML + README badge section ready-to-use?
 ⚠️ Notes
 
 Frontend served via Nginx container at http://localhost:8080
