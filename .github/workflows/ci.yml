@@ -52,4 +52,4 @@ jobs:
       - name: Tear down stack
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
-
+        
