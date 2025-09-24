@@ -40,8 +40,8 @@ jobs:
       - name: Security scan (bandit, non-blocking)
         run: bandit -r backend/ || true
 
-      - name: Validate YAML configs
-        run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
+      - name: Validate YAML configs (use repo rules)
+        run: yamllint -c .yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
       # --- Compose test env (writes a temporary .env) ------------------------
       - name: Prepare CI env for docker-compose
@@ -86,12 +86,13 @@ jobs:
 
       # --- Build images (validation only) ------------------------------------
       - name: Build backend image
-        run: docker build -t student-app:ci -f infra/Dockerfile.backend backend/
+        run: docker build -t student-app:ci -f infra/Dockerfile.backend .
 
       - name: Build frontend image
-        run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend frontend/
+        run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend .
 
       # --- Cleanup ------------------------------------------------------------
       - name: Tear down compose resources
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v        
+        run: docker compose -f infra/docker-compose.yml down -v
+        
