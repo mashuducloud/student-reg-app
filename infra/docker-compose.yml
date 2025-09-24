@@ -13,15 +13,17 @@ services:
       - "5000:5000"   # Flask API
       - "9100:9100"   # Prometheus metrics
     env_file:
-      - ../.env
+      - ./.env
     networks:
       - observability-network
     restart: always
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      # Simpler & more reliable than the python one-liner
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/health || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 8
+      start_period: 60s
 
 
   mysql-db:
@@ -29,10 +31,8 @@ services:
     container_name: mysql-db
     restart: always
     env_file:
-      - ../.env
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME}
+      - ./.env
+    # No ${DB_*} here; the image consumes MYSQL_* directly from env_file
     ports:
       - "3307:3306"
     networks:
@@ -40,10 +40,12 @@ services:
     volumes:
       - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWORD}"]
+      # Expand password INSIDE container; $$ escapes for Compose
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   frontend:
     build:
@@ -124,12 +126,12 @@ services:
       mysql-db:
         condition: service_healthy
     env_file:
-      - ../.env
+      - ./.env
     environment:
       DB_HOST: mysql-db
       DB_PORT: 3306
       DB_NAME: ${DB_NAME}
-      DB_USER: root
+      DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
     networks:
       - observability-network
