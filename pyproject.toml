@@ -1,0 +1,32 @@
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | build
+  | dist
+  | venv
+  | \.venv
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["backend"]
+include_trailing_comma = true
+multi_line_output = 3
+
+[tool.coverage.run]
+branch = true
+source = ["backend"]
+omit = [
+  "backend/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
