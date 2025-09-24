@@ -49,5 +49,3 @@ DB_CONFIG = {
     "user": get_env_var("DB_USER"),
     "password": get_env_var("DB_PASSWORD"),
 }
-
-
