@@ -1,55 +1,97 @@
 name: CI
 
 on:
-  pull_request:
-    branches: ["dev"]
+  workflow_dispatch:
   push:
+    branches: ["dev"]
+  pull_request:
     branches: ["dev"]
 
 jobs:
   ci-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install tooling
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r backend/requirements.txt flake8 bandit pytest pytest-cov yamllint requests
 
-      - name: Lint code
+      - name: Lint (flake8)
         run: flake8 backend/
 
-      - name: Security scan
+      - name: Security scan (bandit, non-blocking)
         run: bandit -r backend/ || true
 
       - name: Validate YAML configs
         run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
-      - name: Build & start stack (detached)
+      # --- Compose test env (writes a temporary .env) ------------------------
+      - name: Prepare CI env for docker-compose
         run: |
-          docker compose --env-file .env -f infra/docker-compose.yml up -d --build
-          echo "⏳ Waiting for stack to be healthy..."
-          docker compose -f infra/docker-compose.yml ps
+          mkdir -p infra
+          cat > infra/.env <<'EOF'
+          DB_HOST=mysql-db
+          DB_PORT=3306
+          DB_NAME=student_registration_db
+          DB_USER=student
+          DB_PASSWORD=ci_pw_123
+          MYSQL_DATABASE=student_registration_db
+          MYSQL_USER=student
+          MYSQL_PASSWORD=ci_pw_123
+          MYSQL_ROOT_PASSWORD=ci_root_123
+          MYSQL_ROOT_HOST=%
+          EOF
+          echo "Wrote infra/.env for CI run."
 
-      - name: Run backend tests with coverage
+      - name: Show Compose config (sanity check)
+        run: docker compose -f infra/docker-compose.yml config
+
+      # --- Run tests via Compose and persist coverage to host -----------------
+      - name: Run backend tests with coverage (persist artifacts)
         run: |
-          docker compose --env-file .env -f infra/docker-compose.yml run --rm tests
+          mkdir -p coverage
+          docker compose -f infra/docker-compose.yml run --rm \
+            -v "$PWD/coverage:/app/coverage" \
+            tests \
+            pytest --cov=. --cov-report=term-missing \
+                   --cov-report=xml:coverage/coverage.xml \
+                   --cov-report=html:coverage/htmlcov -v
 
-      - name: Validate backend Docker image (build only)
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/coverage.xml
+            coverage/htmlcov/
+          if-no-files-found: error
+
+      # --- Build images (validation only) ------------------------------------
+      - name: Build backend image
         run: docker build -t student-app:ci -f infra/Dockerfile.backend backend/
 
-      - name: Validate frontend Docker image (build only)
+      - name: Build frontend image
         run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend frontend/
 
-      - name: Tear down stack
+      # --- Cleanup ------------------------------------------------------------
+      - name: Tear down compose resources
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
-        
+        run: docker compose -f infra/docker-compose.yml down -v        
