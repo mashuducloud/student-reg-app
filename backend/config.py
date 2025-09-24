@@ -13,12 +13,12 @@ log = logging.getLogger(__name__)
 env_var_counter = Counter(
     "env_vars_loaded_total",
     "Total number of environment variables successfully loaded",
-    ["env_var"]  # ✅ fixed: valid label name
+    ["env_var"],  # ✅ fixed: valid label name
 )
 env_var_failures = Counter(
     "env_vars_missing_total",
     "Total number of missing environment variables",
-    ["env_var"]  # ✅ fixed
+    ["env_var"],  # ✅ fixed
 )
 
 
