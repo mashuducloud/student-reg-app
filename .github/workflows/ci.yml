@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ["dev"]
+  push:
+    branches: ["dev"]
+
+jobs:
+  ci-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt flake8 bandit pytest pytest-cov yamllint requests
+
+      - name: Lint code
+        run: flake8 backend/
+
+      - name: Security scan
+        run: bandit -r backend/ || true
+
+      - name: Validate YAML configs
+        run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
+
+      - name: Build & start stack (detached)
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+          echo "⏳ Waiting for stack to be healthy..."
+          docker compose -f infra/docker-compose.yml ps
+
+      - name: Run backend tests with coverage
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml run --rm tests
+
+      - name: Validate backend Docker image (build only)
+        run: docker build -t student-app:ci -f infra/Dockerfile.backend backend/
+
+      - name: Validate frontend Docker image (build only)
+        run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend frontend/
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v
+

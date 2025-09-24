@@ -13,7 +13,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as OTLPGrpcExporter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
-from opentelemetry.sdk.metrics import MeterProvider   # ✅ FIXED
+from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import start_http_server
 
 from opentelemetry._logs import set_logger_provider
@@ -27,13 +27,12 @@ resource = Resource(attributes={"service.name": "student-registration-service"})
 trace.set_tracer_provider(TracerProvider(resource=resource))
 tracer = trace.get_tracer(__name__)
 
-# --- OTLP Exporter (to otel-collector in Docker network) ---
+# --- OTLP Exporter ---
 grpc_exporter = OTLPGrpcExporter(
     endpoint="otel-collector:4317",
     insecure=True
 )
 
-# Add span processors
 provider = trace.get_tracer_provider()
 provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
 provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
@@ -53,19 +52,16 @@ metrics.set_meter_provider(
 )
 meter = metrics.get_meter(__name__)
 
-# Request counter metric
 request_counter = meter.create_counter(
     name="student_registration_requests_total",
     description="Counts incoming student registration requests"
 )
 
-# Start Prometheus metrics server
 start_http_server(9100)
 
 # --- Flask App ---
 app = Flask(__name__)
 CORS(app)
-
 
 
 # --- Middleware for tracing ---
@@ -118,11 +114,11 @@ def create_db_connection():
                     "Connected to DB",
                     extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]}
                 )
-        except Exception as e:  # 👈 catch ALL exceptions
+        except Exception as e:
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
             log.error(f"Database connection failed: {e}", extra={"db.error": str(e)})
-            connection = None   # 👈 ensure None is returned on failure
+            connection = None
     return connection
 
 
@@ -132,6 +128,26 @@ def home():
     with tracer.start_as_current_span("home_handler") as span:
         span.set_status(Status(StatusCode.OK))
         return "Student Registration API is running 🚀"
+
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    Healthcheck endpoint for Docker
+    """
+    with tracer.start_as_current_span("health_handler") as span:
+        try:
+            connection = create_db_connection()
+            if connection and connection.is_connected():
+                connection.close()
+                span.set_status(Status(StatusCode.OK))
+                return jsonify({"status": "healthy"}), 200
+            else:
+                span.set_status(Status(StatusCode.ERROR))
+                return jsonify({"status": "unhealthy", "reason": "DB not connected"}), 500
+        except Exception as e:
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            return jsonify({"status": "unhealthy", "reason": str(e)}), 500
 
 @app.route("/register", methods=["POST"])
 def register_student():
@@ -178,6 +194,7 @@ def register_student():
             log.error(f"Registration failed: {e}", extra={"error": str(e)})
             return jsonify({"error": "Failed to register student"}), 500
 
+
 # --- Run Flask App ---
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False) 
+    app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)

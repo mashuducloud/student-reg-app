@@ -2,47 +2,67 @@ services:
   app:
     build:
       context: ..
-      dockerfile: infra/Dockerfile
+      dockerfile: infra/Dockerfile.backend
     container_name: student-app
     depends_on:
-      - mysql-db
-      - otel-collector
+      mysql-db:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     ports:
       - "5000:5000"   # Flask API
       - "9100:9100"   # Prometheus metrics
     env_file:
-      - ../.env   # Load environment variables
+      - ../.env
     networks:
       - observability-network
-      
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+
   mysql-db:
     image: mysql:8.0
     container_name: mysql-db
     restart: always
     env_file:
-      - ../.env   # DB_NAME and DB_PASSWORD from .env
+      - ../.env
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-Barcelona@1819}
-      MYSQL_DATABASE: ${DB_NAME:-student_registration_db}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
     ports:
       - "3307:3306"
     networks:
       - observability-network
     volumes:
-      # Auto-run schema.sql at startup
       - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
-      
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   frontend:
     build:
-      context: ../frontend   # path to folder with index.html and Dockerfile
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
     container_name: student-frontend
     ports:
       - "8080:80"   # map localhost:8080 → container’s port 80
     networks:
       - observability-network
     depends_on:
-      - app   # wait for backend before starting
+      app:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   otel-collector:
     image: otel/opentelemetry-collector:latest
@@ -97,22 +117,28 @@ services:
   tests:
     build:
       context: ..
-      dockerfile: infra/Dockerfile
+      dockerfile: infra/Dockerfile.backend
     container_name: student-api-tests
-    command: pytest --cov=main --cov-report=term-missing test_app.py -v
+    command: pytest backend/test_app.py --cov=backend -v
     depends_on:
-      - mysql-db
+      mysql-db:
+        condition: service_healthy
     env_file:
       - ../.env
     environment:
       DB_HOST: mysql-db
       DB_PORT: 3306
-      DB_NAME: ${DB_NAME:-student_registration_db}
+      DB_NAME: ${DB_NAME}
       DB_USER: root
-      DB_PASSWORD: ${DB_PASSWORD:-Barcelona@1819}
+      DB_PASSWORD: ${DB_PASSWORD}
     networks:
       - observability-network
+    restart: "no"
 
 networks:
   observability-network:
     driver: bridge
+
+
+
+
