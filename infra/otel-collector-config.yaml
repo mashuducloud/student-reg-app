@@ -1,3 +1,4 @@
+---
 # OpenTelemetry Collector configuration for receiving traces and metrics from the application
 # and exporting traces to Tempo and metrics to Prometheus.
 receivers:
@@ -27,3 +28,4 @@ service:
       receivers: [otlp]
       exporters: [prometheus]
       
+
