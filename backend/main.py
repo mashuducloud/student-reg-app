@@ -183,11 +183,13 @@ def register_student():
             with tracer.start_as_current_span("db_insert_student") as db_span:
                 db_span.set_attribute(
                     "db.statement",
-                    "INSERT INTO students (first_name, last_name, email) VALUES (?, ?, ?)",
+                    "INSERT INTO students (first_name, last_name, email) "
+                    "VALUES (?, ?, ?)",
                 )
                 cursor = connection.cursor()
                 cursor.execute(
-                    "INSERT INTO students (first_name, last_name, email) VALUES (%s, %s, %s)",
+                    "INSERT INTO students (first_name, last_name, email) "
+                    "VALUES (%s, %s, %s)",
                     (first_name, last_name, email),
                 )
                 connection.commit()
