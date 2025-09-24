@@ -122,7 +122,7 @@ services:
       dockerfile: infra/Dockerfile.backend
     container_name: student-api-tests
     working_dir: /app
-    command: pytest test_app.py --cov=backend -v
+    command: pytest test_app.py --cov=. --cov-report=term-missing -v
     depends_on:
       mysql-db:
         condition: service_healthy
@@ -134,6 +134,7 @@ services:
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+      PYTHONPATH: /app
     networks:
       - observability-network
     restart: "no"
