@@ -121,7 +121,7 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.backend
     container_name: student-api-tests
-    command: pytest backend/test_app.py --cov=backend -v
+    command: pytest test_app.py --cov=backend -v
     depends_on:
       mysql-db:
         condition: service_healthy
