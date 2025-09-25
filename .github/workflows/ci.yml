@@ -7,14 +7,13 @@ on:
   pull_request:
     branches: ["dev"]
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   ci-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write          # needed for artifact upload and repo info
+      pull-requests: write     # needed to open a PR with GITHUB_TOKEN (if allowed)
 
     steps:
       - name: Checkout
@@ -47,6 +46,7 @@ jobs:
       - name: Validate YAML configs
         run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
+      # Compose test env (writes a temporary .env)
       - name: Prepare CI env for docker-compose
         run: |
           mkdir -p infra
@@ -67,6 +67,7 @@ jobs:
       - name: Show Compose config (sanity check)
         run: docker compose -f infra/docker-compose.yml config
 
+      # Run tests via Compose and persist coverage to host
       - name: Run backend tests with coverage (persist artifacts)
         run: |
           mkdir -p coverage
@@ -86,27 +87,29 @@ jobs:
             coverage/htmlcov/
           if-no-files-found: error
 
-      # IMPORTANT: build from repo root so COPY backend/... works
+      # Build images (validation only)
       - name: Build backend image
         run: docker build -t student-app:ci -f infra/Dockerfile.backend .
 
       - name: Build frontend image
         run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend .
 
+      # Cleanup
       - name: Tear down compose resources
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
 
+      # Open or reuse PR dev → default branch (e.g., main)
       - name: Open or reuse PR dev → default branch
         if: success() && github.ref == 'refs/heads/dev'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # If org policy blocks GITHUB_TOKEN PR creation, add a PAT secret named PAT_PR with repo scope.
+          github-token: ${{ secrets.PAT_PR || secrets.GITHUB_TOKEN }}
           script: |
-            const core = require('@actions/core');
             const { owner, repo } = context.repo;
 
-            // Determine default branch (main/master/etc.)
+            // Find default branch (e.g., main)
             const repoInfo = await github.rest.repos.get({ owner, repo });
             const base = repoInfo.data.default_branch;
             const head = 'dev';
@@ -116,26 +119,26 @@ jobs:
               return;
             }
 
-            // If an open PR already exists from dev -> base, reuse it
+            // Reuse existing open PR if present
             const existing = await github.rest.pulls.list({
               owner, repo, state: 'open', base, head: `${owner}:${head}`
             });
-            if (existing.data.length > 0) {
+            if (existing.data.length) {
               core.info(`PR already open: #${existing.data[0].number} (${existing.data[0].html_url})`);
               return;
             }
 
-            // Create the PR (use single-line body with explicit \n to avoid YAML schema warnings)
-            const prBody =
-              "This PR was automatically opened by CI after all checks on **" + head + "** passed." +
-              "\\n\\nCommit: " + context.sha +
-              "\\nActor: @" + context.actor;
+            // Create PR
+            const body =
+              `This PR was automatically opened by CI after all checks on **${head}** passed.` +
+              `\n\nCommit: ${context.sha}` +
+              `\nActor: @${context.actor}`;
 
             const res = await github.rest.pulls.create({
               owner, repo, head, base,
               title: `Auto PR: ${head} → ${base} (opened by CI)`,
-              body: prBody,
-              draft: false
+              body
             });
 
             core.info(`Created PR #${res.data.number} (${res.data.html_url})`);
+
