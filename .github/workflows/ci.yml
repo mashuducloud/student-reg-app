@@ -5,18 +5,17 @@ on:
   push:
     branches: ["dev"]
   pull_request:
-    branches: ["main"]
+    branches: ["dev"]
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: false
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   ci-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,7 +70,12 @@ jobs:
       - name: Run backend tests with coverage (persist artifacts)
         run: |
           mkdir -p coverage
-          docker compose -f infra/docker-compose.yml run --rm             -v "$PWD/coverage:/app/coverage"             tests             pytest --cov=. --cov-report=term-missing                    --cov-report=xml:coverage/coverage.xml                    --cov-report=html:coverage/htmlcov -v
+          docker compose -f infra/docker-compose.yml run --rm \
+            -v "$PWD/coverage:/app/coverage" \
+            tests \
+            pytest --cov=. --cov-report=term-missing \
+                   --cov-report=xml:coverage/coverage.xml \
+                   --cov-report=html:coverage/htmlcov -v
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -82,6 +86,7 @@ jobs:
             coverage/htmlcov/
           if-no-files-found: error
 
+      # IMPORTANT: build from repo root so COPY backend/... works
       - name: Build backend image
         run: docker build -t student-app:ci -f infra/Dockerfile.backend .
 
@@ -92,44 +97,45 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
 
-  open-pr:
-    needs: ci-checks
-    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Open or reuse PR dev → main
+      - name: Open or reuse PR dev → default branch
+        if: success() && github.ref == 'refs/heads/dev'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const head = 'dev';
-            const base = 'main';
+            const core = require('@actions/core');
             const { owner, repo } = context.repo;
 
-            const { data: prs } = await github.rest.pulls.list({
-              owner, repo, state: 'open', base, head: `${owner}:${head}`
-            });
+            // Determine default branch (main/master/etc.)
+            const repoInfo = await github.rest.repos.get({ owner, repo });
+            const base = repoInfo.data.default_branch;
+            const head = 'dev';
 
-            if (prs.length > 0) {
-              core.info(`Existing PR #${prs[0].number} from ${head} -> ${base} found: ${prs[0].html_url}`);
+            if (base === head) {
+              core.info(`Default branch (${base}) equals head (${head}); skipping PR.`);
               return;
             }
 
-            const title = `Auto PR: ${head} → ${base} (opened by CI)`;
-            const body = [
-              'This PR was automatically opened by CI after all checks on **dev** passed.',
-              '',
-              `Commit: ${context.sha}`,
-              `Actor: @${context.actor}`
-            ].join('\n');
+            // If an open PR already exists from dev -> base, reuse it
+            const existing = await github.rest.pulls.list({
+              owner, repo, state: 'open', base, head: `${owner}:${head}`
+            });
+            if (existing.data.length > 0) {
+              core.info(`PR already open: #${existing.data[0].number} (${existing.data[0].html_url})`);
+              return;
+            }
 
-            const { data: pr } = await github.rest.pulls.create({
-              owner, repo, head, base, title, body, draft: false
+            // Create the PR (use single-line body with explicit \n to avoid YAML schema warnings)
+            const prBody =
+              "This PR was automatically opened by CI after all checks on **" + head + "** passed." +
+              "\\n\\nCommit: " + context.sha +
+              "\\nActor: @" + context.actor;
+
+            const res = await github.rest.pulls.create({
+              owner, repo, head, base,
+              title: `Auto PR: ${head} → ${base} (opened by CI)`,
+              body: prBody,
+              draft: false
             });
 
-            core.info(`Opened PR #${pr.number}: ${pr.html_url}`)
+            core.info(`Created PR #${res.data.number} (${res.data.html_url})`);
