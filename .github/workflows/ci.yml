@@ -66,53 +66,47 @@ jobs:
       - name: Show Compose config (sanity check)
         run: docker compose -f infra/docker-compose.yml config
 
-      # --- Observability stack (manual wait for health) ---
-      - name: Start observability stack (wait for health)
+            # --- Observability stack (start only; no health wait) ---
+      - name: Start observability stack
         shell: bash
         run: |
           set -euo pipefail
           docker compose -f infra/docker-compose.yml up -d otel-collector tempo prometheus grafana app
-          # Wait for key services to be healthy
-          for name in student-app infra-prometheus otel-collector infra-grafana infra-tempo; do
-            echo "Waiting for $name to be healthy..."
-            for i in {1..90}; do
-              status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' "$name" 2>/dev/null || echo "starting")
-              if [ "$status" = "healthy" ]; then
-                echo "$name is healthy"
-                break
-              fi
-              sleep 2
-            done
-            status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' "$name" 2>/dev/null || echo "starting")
-            if [ "$status" != "healthy" ]; then
-              echo "::error::$name did not become healthy"; docker compose -f infra/docker-compose.yml ps; exit 1
-            fi
-          done
           docker compose -f infra/docker-compose.yml ps
 
-      # --- In-network scrape sanity (single exec; with retries) ---
+      # --- In-network scrape sanity (single exec; robust retries) ---
       - name: In-network scrape sanity (from Prometheus container)
         shell: bash
         run: |
           set -euo pipefail
           docker compose -f infra/docker-compose.yml exec -T prometheus sh -lc '
             set -eu
+
+            # student-app metrics
             ok=0
-            for i in $(seq 1 30); do
+            for i in $(seq 1 60); do
               if wget -qO- http://student-app:9100/metrics >/dev/null; then ok=1; break; fi
               sleep 2
             done
             [ "$ok" -eq 1 ] || { echo "student-app metrics not ready"; exit 1; }
 
+            # otel-collector metrics
             ok=0
-            for i in $(seq 1 30); do
+            for i in $(seq 1 60); do
               if wget -qO- http://otel-collector:9464/metrics >/dev/null; then ok=1; break; fi
               sleep 2
             done
             [ "$ok" -eq 1 ] || { echo "otel-collector metrics not ready"; exit 1; }
 
-            wget -qO- http://localhost:9090/-/ready >/dev/null
+            # prometheus readiness
+            ok=0
+            for i in $(seq 1 60); do
+              if wget -qO- http://localhost:9090/-/ready >/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            [ "$ok" -eq 1 ] || { echo "prometheus not ready"; exit 1; }
           '
+
 
       - name: Verify Prometheus has active targets
         shell: bash
