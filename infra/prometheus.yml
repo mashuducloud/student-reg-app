@@ -11,9 +11,10 @@ scrape_configs:
   # Scrape Flask Student App metrics
   - job_name: 'student-app'
     static_configs:
-      - targets: ['student-app:9100']  # service alias (also resolves as student-app)
+      - targets: ['student-app:9100']
 
-  # Scrape OpenTelemetry Collector (Prometheus exporter)
+  # Scrape OpenTelemetry Collector (optional, for tracing/OTLP metrics)
   - job_name: 'otel-collector'
     static_configs:
-      - targets: ['otel-collector:9464']
+      - targets: ['otel-collector:8888']
+     
