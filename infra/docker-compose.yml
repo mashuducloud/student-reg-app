@@ -66,6 +66,7 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- otel-collector ---
   otel-collector:
     image: otel/opentelemetry-collector:latest
     container_name: otel-collector
@@ -75,10 +76,15 @@ services:
     ports:
       - "43171:4317"   # OTLP gRPC
       - "43181:4318"   # OTLP HTTP
-    restart: always
-    networks:
-      - observability-network
+      - "9464:9464"    # Prometheus exporter (metrics)  ← add
+    healthcheck:                       # ← add
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9464/metrics | head -n1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
+# --- tempo ---
   tempo:
     image: grafana/tempo:latest
     container_name: infra-tempo
@@ -87,10 +93,14 @@ services:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
       - "3201:3200"   # Tempo UI
-    restart: always
-    networks:
-      - observability-network
+    healthcheck:                       # ← add
+      test: ["CMD", "curl", "-f", "http://localhost:3200"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
+# --- prometheus ---
   prometheus:
     image: prom/prometheus:latest
     container_name: infra-prometheus
@@ -100,10 +110,14 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9091:9090"   # Prometheus UI
-    restart: always
-    networks:
-      - observability-network
+    healthcheck:                       # ← add
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
+# --- grafana ---
   grafana:
     image: grafana/grafana:latest
     container_name: infra-grafana
@@ -112,9 +126,13 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     ports:
       - "3300:3000"   # Grafana UI
-    restart: always
-    networks:
-      - observability-network
+    healthcheck:                       # ← add
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
 
   tests:
     build:

@@ -67,6 +67,44 @@ jobs:
       - name: Show Compose config (sanity check)
         run: docker compose -f infra/docker-compose.yml config
 
+      - name: Start observability stack
+        run: |
+          docker compose -f infra/docker-compose.yml up -d otel-collector tempo prometheus grafana
+
+      - name: Wait for observability health
+        run: |
+          # Otel Collector metrics
+          for i in {1..40}; do curl -fsS http://localhost:9464/metrics && break || sleep 3; done
+          # Tempo UI
+          for i in {1..40}; do curl -fsS http://localhost:3201/ && break || sleep 3; done
+          # Prometheus readiness
+          for i in {1..40}; do curl -fsS http://localhost:9091/-/ready && break || sleep 3; done
+          # Grafana health
+          for i in {1..40}; do curl -fsS http://localhost:3300/api/health && break || sleep 3; done
+
+      - name: Verify Prometheus sees targets
+        run: |
+          python - <<'PY'
+          import sys, requests
+          r = requests.get("http://localhost:9091/api/v1/targets?state=active", timeout=15)
+          r.raise_for_status()
+          data = r.json()["data"]["activeTargets"]
+          jobs = {t["labels"].get("job") for t in data}
+          required = {"prometheus","student-app","otel-collector"}  # from your scrape_configs
+          missing = required - jobs
+          if missing:
+              print("Missing Prometheus targets:", missing)
+              sys.exit(1)
+          print("Prometheus targets OK:", jobs)
+          PY
+
+      - name: Bring up app (so Prometheus can scrape student-app)
+        run: |
+          docker compose -f infra/docker-compose.yml up -d mysql-db app
+          # Wait for app health (Compose healthcheck handles retries)
+          sleep 10
+
+
       # Run tests via Compose and persist coverage to host
       - name: Run backend tests with coverage (persist artifacts)
         run: |
