@@ -99,46 +99,73 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
 
-      # Open or reuse PR dev → default branch (e.g., main)
-      - name: Open or reuse PR dev → default branch
+      # -------- New logic below: only open PR when dev is ahead --------
+      - name: Compare dev → default branch
+        id: compare
         if: success() && github.ref == 'refs/heads/dev'
         uses: actions/github-script@v7
         with:
-          # If org policy blocks GITHUB_TOKEN PR creation, add a PAT secret named PAT_PR with repo scope.
-          github-token: ${{ secrets.PAT_PR || secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-
-            // Find default branch (e.g., main)
-            const repoInfo = await github.rest.repos.get({ owner, repo });
-            const base = repoInfo.data.default_branch;
+            // Resolve default branch dynamically (e.g., main/master)
+            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
+            const base = repoData.default_branch;
             const head = 'dev';
 
             if (base === head) {
-              core.info(`Default branch (${base}) equals head (${head}); skipping PR.`);
+              core.info(`Default branch (${base}) equals head (${head}); skipping compare.`);
+              core.setOutput('base', base);
+              core.setOutput('ahead_by', 0);
               return;
             }
+
+            const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', {
+              owner, repo, base, head
+            });
+            core.info(`dev is ahead of ${base} by ${cmp.ahead_by} commits`);
+            core.setOutput('base', base);
+            core.setOutput('ahead_by', cmp.ahead_by);
+
+      - name: Open or reuse PR dev → default branch
+        if: success() && github.ref == 'refs/heads/dev' && steps.compare.outputs.ahead_by > 0
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_PR || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const base = '${{ steps.compare.outputs.base }}';
+            const head = 'dev';
 
             // Reuse existing open PR if present
-            const existing = await github.rest.pulls.list({
+            const { data: prs } = await github.rest.pulls.list({
               owner, repo, state: 'open', base, head: `${owner}:${head}`
             });
-            if (existing.data.length) {
-              core.info(`PR already open: #${existing.data[0].number} (${existing.data[0].html_url})`);
+            if (prs.length > 0) {
+              core.info(`PR already open: #${prs[0].number} (${prs[0].html_url})`);
               return;
             }
 
-            // Create PR
-            const body =
-              `This PR was automatically opened by CI after all checks on **${head}** passed.` +
-              `\n\nCommit: ${context.sha}` +
-              `\nActor: @${context.actor}`;
+            // Create PR (handle 422 gracefully just in case)
+            try {
+              const body =
+                `This PR was automatically opened by CI after all checks on **${head}** passed.` +
+                `\n\nCommit: ${context.sha}` +
+                `\nActor: @${context.actor}`;
 
-            const res = await github.rest.pulls.create({
-              owner, repo, head, base,
-              title: `Auto PR: ${head} → ${base} (opened by CI)`,
-              body
-            });
+              const { data: pr } = await github.rest.pulls.create({
+                owner, repo, head, base,
+                title: `Auto PR: ${head} → ${base} (opened by CI)`,
+                body
+              });
+              core.info(`Created PR #${pr.number} (${pr.html_url})`);
+            } catch (err) {
+              if (err.status === 422 && /No commits between/i.test(err.message)) {
+                core.info('No commits between branches; skipping PR.');
+              } else {
+                throw err;
+              }
+            }
 
-            core.info(`Created PR #${res.data.number} (${res.data.html_url})`);
-
+      - name: Nothing to PR — skip
+        if: steps.compare.outputs.ahead_by == 0
+        run: echo "dev is not ahead of ${{ steps.compare.outputs.base }}; skipping PR creation."
