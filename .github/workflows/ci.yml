@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write          # needed for artifact upload and repo info
-      pull-requests: write     # needed to open a PR with GITHUB_TOKEN (if allowed)
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout
@@ -46,7 +46,6 @@ jobs:
       - name: Validate YAML configs
         run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
-      # Compose test env (writes a temporary .env)
       - name: Prepare CI env for docker-compose
         run: |
           mkdir -p infra
@@ -67,38 +66,56 @@ jobs:
       - name: Show Compose config (sanity check)
         run: docker compose -f infra/docker-compose.yml config
 
-# --- Observability stack (wait for health) ---
-- name: Start observability stack (wait)
-  run: |
-    docker compose -f infra/docker-compose.yml up -d \
-      --wait --wait-timeout 120s \
-      otel-collector tempo prometheus grafana app
-    docker compose -f infra/docker-compose.yml ps
+      # --- Observability stack (manual wait for health) ---
+      - name: Start observability stack (wait for health)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f infra/docker-compose.yml up -d otel-collector tempo prometheus grafana app
+          # Wait for key services to be healthy
+          for name in student-app infra-prometheus otel-collector infra-grafana infra-tempo; do
+            echo "Waiting for $name to be healthy..."
+            for i in {1..90}; do
+              status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' "$name" 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "$name is healthy"
+                break
+              fi
+              sleep 2
+            done
+            status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' "$name" 2>/dev/null || echo "starting")
+            if [ "$status" != "healthy" ]; then
+              echo "::error::$name did not become healthy"; docker compose -f infra/docker-compose.yml ps; exit 1
+            fi
+          done
+          docker compose -f infra/docker-compose.yml ps
 
-# --- In-network scrape sanity (single exec; with retries) ---
-- name: In-network scrape sanity (from Prometheus container)
-  run: |
-    docker compose -f infra/docker-compose.yml exec -T prometheus sh -lc '
-      set -eu
-      ok=0
-      for i in $(seq 1 30); do
-        if wget -qO- http://student-app:9100/metrics >/dev/null; then ok=1; break; fi
-        sleep 2
-      done
-      [ "$ok" -eq 1 ] || { echo "student-app metrics not ready"; exit 1; }
+      # --- In-network scrape sanity (single exec; with retries) ---
+      - name: In-network scrape sanity (from Prometheus container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f infra/docker-compose.yml exec -T prometheus sh -lc '
+            set -eu
+            ok=0
+            for i in $(seq 1 30); do
+              if wget -qO- http://student-app:9100/metrics >/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            [ "$ok" -eq 1 ] || { echo "student-app metrics not ready"; exit 1; }
 
-      ok=0
-      for i in $(seq 1 30); do
-        if wget -qO- http://otel-collector:9464/metrics >/dev/null; then ok=1; break; fi
-        sleep 2
-      done
-      [ "$ok" -eq 1 ] || { echo "otel-collector metrics not ready"; exit 1; }
+            ok=0
+            for i in $(seq 1 30); do
+              if wget -qO- http://otel-collector:9464/metrics >/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            [ "$ok" -eq 1 ] || { echo "otel-collector metrics not ready"; exit 1; }
 
-      wget -qO- http://localhost:9090/-/ready >/dev/null
-    '
-
+            wget -qO- http://localhost:9090/-/ready >/dev/null
+          '
 
       - name: Verify Prometheus has active targets
+        shell: bash
         run: |
           python - <<'PY'
           import sys, requests
@@ -113,9 +130,10 @@ jobs:
           print("Prometheus targets OK:", jobs)
           PY
 
-      # Run tests via Compose and persist coverage to host
       - name: Run backend tests with coverage (persist artifacts)
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p coverage
           docker compose -f infra/docker-compose.yml run --rm             -v "$PWD/coverage:/app/coverage"             tests             pytest --cov=. --cov-report=term-missing                    --cov-report=xml:coverage/coverage.xml                    --cov-report=html:coverage/htmlcov -v
 
@@ -128,14 +146,12 @@ jobs:
             coverage/htmlcov/
           if-no-files-found: error
 
-      # Build images (validation only)
       - name: Build backend image
         run: docker build -t student-app:ci -f infra/Dockerfile.backend .
 
       - name: Build frontend image
         run: docker build -t student-frontend:ci -f infra/Dockerfile.frontend .
 
-      # Cleanup
       - name: Tear down compose resources
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
@@ -148,21 +164,16 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            // Resolve default branch dynamically (e.g. main/master)
             const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
             const base = repoData.default_branch;
             const head = 'dev';
-
             if (base === head) {
               core.info(`Default branch (${base}) equals head (${head}); skipping compare.`);
               core.setOutput('base', base);
               core.setOutput('ahead_by', 0);
               return;
             }
-
-            const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', {
-              owner, repo, base, head
-            });
+            const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', { owner, repo, base, head });
             core.info(`dev is ahead of ${base} by ${cmp.ahead_by} commits`);
             core.setOutput('base', base);
             core.setOutput('ahead_by', cmp.ahead_by);
@@ -171,33 +182,24 @@ jobs:
         if: success() && github.ref == 'refs/heads/dev' && steps.compare.outputs.ahead_by > 0
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_PR || secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PAT_PR || secrets/GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const base = '${{ steps.compare.outputs.base }}';
             const head = 'dev';
-
-            // Reuse existing open PR if present
-            const { data: prs } = await github.rest.pulls.list({
-              owner, repo, state: 'open', base, head: `${owner}:${head}`
-            });
+            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', base, head: `${owner}:${head}` });
             if (prs.length > 0) {
               core.info(`PR already open: #${prs[0].number} (${prs[0].html_url})`);
               return;
             }
-
-            // Create PR (handle 422 gracefully just in case)
             try {
-              const body =
-                `This PR was automatically opened by CI after all checks on **${head}** passed.` +
-                `\n\nCommit: ${context.sha}` +
-                `\nActor: @${context.actor}`;
-
-              const { data: pr } = await github.rest.pulls.create({
-                owner, repo, head, base,
-                title: `Auto PR: ${head} → ${base} (opened by CI)`,
-                body
-              });
+              const body = [
+                'This PR was automatically opened by CI after all checks on **' + head + '** passed.',
+                '',
+                'Commit: ' + context.sha,
+                'Actor: @' + context.actor
+              ].join('\n');
+              const { data: pr } = await github.rest.pulls.create({ owner, repo, head, base, title: `Auto PR: ${head} → ${base} (opened by CI)`, body });
               core.info(`Created PR #${pr.number} (${pr.html_url})`);
             } catch (err) {
               if (err.status === 422 && /No commits between/i.test(err.message)) {
@@ -210,4 +212,3 @@ jobs:
       - name: Nothing to PR — skip
         if: steps.compare.outputs.ahead_by == 0
         run: echo "dev is not ahead of ${{ steps.compare.outputs.base }}; skipping PR creation."
-
