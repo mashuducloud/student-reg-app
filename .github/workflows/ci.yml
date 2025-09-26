@@ -67,18 +67,36 @@ jobs:
       - name: Show Compose config (sanity check)
         run: docker compose -f infra/docker-compose.yml config
 
-      # --- Observability stack smoke tests ---
-      - name: Start observability stack
-        run: |
-          docker compose -f infra/docker-compose.yml up -d otel-collector tempo prometheus grafana app
+# --- Observability stack (wait for health) ---
+- name: Start observability stack (wait)
+  run: |
+    docker compose -f infra/docker-compose.yml up -d \
+      --wait --wait-timeout 120s \
+      otel-collector tempo prometheus grafana app
+    docker compose -f infra/docker-compose.yml ps
 
-      - name: In-network scrape sanity (from Prometheus container)
-        run: |
-          docker compose -f infra/docker-compose.yml exec -T prometheus sh -lc '
-            wget -qO- http://student-app:9100/metrics >/dev/null &&
-            wget -qO- http://otel-collector:9464/metrics >/dev/null &&
-            wget -qO- http://localhost:9090/-/ready >/dev/null
-          '
+# --- In-network scrape sanity (single exec; with retries) ---
+- name: In-network scrape sanity (from Prometheus container)
+  run: |
+    docker compose -f infra/docker-compose.yml exec -T prometheus sh -lc '
+      set -eu
+      ok=0
+      for i in $(seq 1 30); do
+        if wget -qO- http://student-app:9100/metrics >/dev/null; then ok=1; break; fi
+        sleep 2
+      done
+      [ "$ok" -eq 1 ] || { echo "student-app metrics not ready"; exit 1; }
+
+      ok=0
+      for i in $(seq 1 30); do
+        if wget -qO- http://otel-collector:9464/metrics >/dev/null; then ok=1; break; fi
+        sleep 2
+      done
+      [ "$ok" -eq 1 ] || { echo "otel-collector metrics not ready"; exit 1; }
+
+      wget -qO- http://localhost:9090/-/ready >/dev/null
+    '
+
 
       - name: Verify Prometheus has active targets
         run: |
