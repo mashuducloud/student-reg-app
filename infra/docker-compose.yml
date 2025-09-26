@@ -15,9 +15,7 @@ services:
     env_file:
       - ./.env
     networks:
-      observability-network:
-        aliases:
-          - student-app
+      - observability-network
     restart: always
     healthcheck:
       # Simpler & more reliable than the python one-liner
@@ -26,6 +24,7 @@ services:
       timeout: 5s
       retries: 8
       start_period: 60s
+
 
   mysql-db:
     image: mysql:8.0
@@ -62,14 +61,13 @@ services:
         condition: service_healthy
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
 
-  # --- otel-collector ---
   otel-collector:
-    image: otel/opentelemetry-collector:latest
+    image: otel/opentelemetry-collector:0.135.0
     container_name: otel-collector
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
@@ -77,39 +75,24 @@ services:
     ports:
       - "43171:4317"   # OTLP gRPC
       - "43181:4318"   # OTLP HTTP
-      - "9464:9464"    # Prometheus exporter (metrics)
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9464/metrics | head -n1 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
     restart: always
     networks:
       - observability-network
 
-  # --- tempo ---
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.8.0
     container_name: infra-tempo
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
       - "3201:3200"   # Tempo UI
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3200/"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
     restart: always
     networks:
       - observability-network
 
-  # --- prometheus ---
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.5.0
     container_name: infra-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -117,31 +100,18 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9091:9090"   # Prometheus UI
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/-/ready"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
     restart: always
     networks:
       - observability-network
 
-  # --- grafana ---
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.2.0
     container_name: infra-grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
     ports:
       - "3300:3000"   # Grafana UI
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
     restart: always
     networks:
       - observability-network
@@ -172,6 +142,7 @@ services:
 networks:
   observability-network:
     driver: bridge
+
 
 
 
