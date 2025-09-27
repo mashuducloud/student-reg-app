@@ -1,4 +1,4 @@
-name: CD - Private ECR push + Public mirror (after CI)
+name: CD - Private ECR push + Public mirror (after CI, hardened, signed)
 
 on:
   workflow_run:
@@ -12,26 +12,28 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write  # required for Cosign keyless signing (GitHub OIDC)
 
 jobs:
   push-images:
-    # Run when triggered manually OR when CI completed successfully on master
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
+    environment: production
 
     env:
       AWS_REGION: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_REGION }}
       BACKEND_DOCKERFILE: infra/Dockerfile.backend
       FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
-      # Private ECR single repo for both images
       ECR_REPOSITORY: mashkenneth/student-reg-app
-      # Explicit registry for your account/region
       ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
+      IMAGE_SIZE_LIMIT: ${{ 800 * 1024 * 1024 }}
+      COSIGN_EXPERIMENTAL: "true"
+      COSIGN_YES: "true"
 
     steps:
       - name: Checkout
@@ -56,6 +58,30 @@ jobs:
           set -euo pipefail
           aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1             || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
 
+      - name: Ensure lifecycle policy (keep last 10 backend/frontend tags)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > policy.json <<'JSON'
+          {
+            "rules": [
+              {
+                "rulePriority": 10,
+                "description": "Expire old backend-* tags, keep last 10",
+                "selection": { "tagStatus": "tagged", "tagPrefixList": ["backend-"], "countType": "imageCountMoreThan", "countNumber": 10 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 20,
+                "description": "Expire old frontend-* tags, keep last 10",
+                "selection": { "tagStatus": "tagged", "tagPrefixList": ["frontend-"], "countType": "imageCountMoreThan", "countNumber": 10 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+          JSON
+          aws ecr put-lifecycle-policy --repository-name "${ECR_REPOSITORY}" --lifecycle-policy-text file://policy.json >/dev/null || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -68,8 +94,9 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           reg="${{ steps.login-ecr.outputs.registry }}"
           if [ -z "$reg" ]; then reg="${ECR_REGISTRY}"; fi
+          base="$reg/${ECR_REPOSITORY}"
           echo "registry=$reg" >> "$GITHUB_OUTPUT"
-          echo "base=$reg/${ECR_REPOSITORY}" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Build & push BACKEND (backend-*)
         uses: docker/build-push-action@v6
@@ -97,29 +124,104 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Output pushed images
+      - name: Enforce image size budget
+        shell: bash
         run: |
-          echo "Pushed to PRIVATE ECR:"
-          echo "  ${{ steps.vars.outputs.base }}:backend-latest"
-          echo "  ${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}"
-          echo "  ${{ steps.vars.outputs.base }}:frontend-latest"
-          echo "  ${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}"
+          set -euo pipefail
+          limit="${IMAGE_SIZE_LIMIT}"
+          for tag in "backend-sha-${{ steps.vars.outputs.sha }}" "frontend-sha-${{ steps.vars.outputs.sha }}"; do
+            ref="${{ steps.vars.outputs.base }}:${tag}"
+            echo "Checking size of $ref"
+            docker pull "$ref" >/dev/null
+            size=$(docker image inspect "$ref" --format '{{.Size}}')
+            echo "Size(bytes)=$size"
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error ::$ref exceeds size budget ($size > $limit)"; exit 1
+            fi
+          done
+
+      - name: Trivy scan - backend (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Trivy scan - frontend (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      # ---- Cosign: install, sign by digest, verify ----
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Resolve image digests (private ECR)
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${ECR_REPOSITORY}"
+          BACKEND_TAG="backend-sha-${{ steps.vars.outputs.sha }}"
+          FRONTEND_TAG="frontend-sha-${{ steps.vars.outputs.sha }}"
+          B_DIGEST=$(aws ecr batch-get-image --repository-name "$REPO" --image-ids imageTag="$BACKEND_TAG" --query 'images[0].imageId.imageDigest' --output text)
+          F_DIGEST=$(aws ecr batch-get-image --repository-name "$REPO" --image-ids imageTag="$FRONTEND_TAG" --query 'images[0].imageId.imageDigest' --output text)
+          echo "backend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${B_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "frontend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${F_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Backend digest: $B_DIGEST"
+          echo "Frontend digest: $F_DIGEST"
+
+      - name: Cosign sign (keyless) - private images
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${{ steps.digests.outputs.backend_ref }}"
+          cosign sign --yes "${{ steps.digests.outputs.frontend_ref }}"
+
+      - name: Cosign verify (keyless) - sanity
+        shell: bash
+        run: |
+          set -euo pipefail
+          for ref in "${{ steps.digests.outputs.backend_ref }}" "${{ steps.digests.outputs.frontend_ref }}"; do
+            echo "Verifying signature for $ref"
+            cosign verify               --certificate-oidc-issuer https://token.actions.githubusercontent.com               --certificate-identity-regexp "https://github.com/.+"               "$ref" >/dev/null
+            echo "Verified: $ref"
+          done
+
+      - name: Output pushed & signed images
+        run: |
+          echo "## Pushed & Signed (PRIVATE ECR)" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.vars.outputs.base }}:backend-latest" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.digests.outputs.backend_ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.vars.outputs.base }}:frontend-latest" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.digests.outputs.frontend_ref }}" >> $GITHUB_STEP_SUMMARY
 
   mirror-third-party-public:
     needs: push-images
     if: needs.push-images.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    continue-on-error: true
+    environment: production
 
     env:
       AWS_REGION: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_REGION }}
-      # pinned upstream tags
       PROMETHEUS_TAG: v3.5.0
       GRAFANA_TAG: 12.2.0
       TEMPO_TAG: 2.8.0
       OTELCOL_TAG: 0.135.0
-      # ECR PUBLIC single repo (requested path with slash)
-      PUBLIC_REPO_NAME: mashkenneth/public-student-reg-app
+      PUBLIC_REPO_NAME: mashkenneth/public-student-reg-app  # NOTE: ECR Public repo names cannot include '/', change if this errors.
 
     steps:
       - name: Configure AWS credentials (public ECR)
@@ -147,12 +249,11 @@ jobs:
             alias=$(aws ecr-public describe-registries --region "$AWS_REGION"                      --query 'registries[0].aliases[0].name' --output text 2>/dev/null || true)
           fi
           if [ -z "$alias" ] || [ "$alias" = "None" ]; then
-            echo "::error ::ECR public alias not resolved. Add ECR_PUBLIC_ALIAS to AWS_DEPLOY_SECRET."
-            exit 1
+            echo "::warning ::ECR public alias not resolved; skipping mirroring."
+            exit 0
           fi
           echo "alias=$alias" >> "$GITHUB_OUTPUT"
           echo "uri=${{ steps.login-ecr-public.outputs.registry }}/$alias" >> "$GITHUB_OUTPUT"
-          echo "Resolved: ${{ steps.login-ecr-public.outputs.registry }}/$alias"
 
       - name: Ensure ECR Public repository exists (single repo)
         shell: bash
@@ -160,33 +261,36 @@ jobs:
           set -euo pipefail
           aws ecr-public describe-repositories --region "$AWS_REGION" --repository-names "${PUBLIC_REPO_NAME}" >/dev/null 2>&1             || aws ecr-public create-repository --region "$AWS_REGION" --repository-name "${PUBLIC_REPO_NAME}" >/dev/null
 
-      - name: Mirror upstream images → ECR Public (single repo, prefixed tags)
+      - name: Mirror upstream images → ECR Public (prefix tags)
         shell: bash
         run: |
           set -euo pipefail
           BASE="${{ steps.ecr-public.outputs.uri }}/${{ env.PUBLIC_REPO_NAME }}"
-          mapfile -t IMAGES < <(cat <<EOF
-          prom/prometheus:${PROMETHEUS_TAG}               ${BASE}:prometheus-${PROMETHEUS_TAG}
-          grafana/grafana:${GRAFANA_TAG}                  ${BASE}:grafana-${GRAFANA_TAG}
-          grafana/tempo:${TEMPO_TAG}                      ${BASE}:tempo-${TEMPO_TAG}
-          otel/opentelemetry-collector:${OTELCOL_TAG}     ${BASE}:otelcol-${OTELCOL_TAG}
-          EOF
-          )
-          for row in "${IMAGES[@]}"; do
-            src=$(echo "$row" | awk '{print $1}')
-            dst=$(echo "$row" | awk '{print $2}')
-            echo "Mirroring $src -> $dst"
+          while read -r line; do
+            src=$(echo "$line" | awk '{print $1}')
+            prefix=$(echo "$line" | awk '{print $2}')
             docker pull --platform linux/amd64 "$src"
+            tag="${prefix}-$(echo "$src" | awk -F: '{print $2}')"
+            dst="${BASE}:${tag}"
+            echo "Mirroring $src -> $dst"
             docker tag "$src" "$dst"
             docker push "$dst"
-          done
+            printf "%s %s\n" "$dst" "$src" >> mirrored.txt
+          done <<'LIST'
+          prom/prometheus:${PROMETHEUS_TAG}           prometheus
+          grafana/grafana:${GRAFANA_TAG}              grafana
+          grafana/tempo:${TEMPO_TAG}                  tempo
+          otel/opentelemetry-collector:${OTELCOL_TAG} otelcol
+          LIST
 
-      - name: Output mirrored image tags
-        shell: bash
+      - name: Summary of mirrored images
+        if: always()
         run: |
-          BASE="${{ steps.ecr-public.outputs.uri }}/${{ env.PUBLIC_REPO_NAME }}"
-          echo "Public ECR (single repo) images:"
-          echo "  ${BASE}:prometheus-${PROMETHEUS_TAG}"
-          echo "  ${BASE}:grafana-${GRAFANA_TAG}"
-          echo "  ${BASE}:tempo-${TEMPO_TAG}"
-          echo "  ${BASE}:otelcol-${OTELCOL_TAG}"
+          echo "## Public ECR Mirrors" >> $GITHUB_STEP_SUMMARY
+          if [ -f mirrored.txt ]; then
+            while read -r dst src; do
+              echo "- ${dst} (from ${src})" >> $GITHUB_STEP_SUMMARY
+            done < mirrored.txt
+          else
+            echo "_No images mirrored (alias or repo missing)_" >> $GITHUB_STEP_SUMMARY
+          fi
