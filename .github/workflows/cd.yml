@@ -1,8 +1,8 @@
-name: CD - Private ECR push + Public mirror (after CI, hardened, signed, purge)
+name: CD - Private ECR push + Public mirror (after CI, hardened, signed, purge & clean tags)
 
 on:
   workflow_run:
-    workflows: ["CI"]         # must exactly match your CI workflow name
+    workflows: ["CI"]   # must match your CI workflow name
     types: [completed]
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write  # for Cosign keyless (GitHub OIDC)
+  id-token: write  # Cosign keyless (GitHub OIDC)
 
 jobs:
   push-images:
@@ -34,6 +34,8 @@ jobs:
       IMAGE_SIZE_LIMIT: "838860800"   # 800 MiB
       COSIGN_EXPERIMENTAL: "true"
       COSIGN_YES: "true"
+      # Cosign signatures go to a separate repo to avoid clutter
+      COSIGN_REPOSITORY: 724772092393.dkr.ecr.us-east-1.amazonaws.com/mashkenneth/student-reg-app-sig
 
     steps:
       - name: Checkout
@@ -52,7 +54,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ---- PURGE PRIVATE REPO (delete repo + all tags/images) ----
+      # Purge the private repo entirely (removes all images/tags)
       - name: Purge PRIVATE ECR repo (delete repository + all images)
         shell: bash
         run: |
@@ -72,6 +74,14 @@ jobs:
           set -euo pipefail
           aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 \
             || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
+
+      - name: Ensure PRIVATE ECR signatures repo exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIG_REPO="${ECR_REPOSITORY}-sig"
+          aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${SIG_REPO}" >/dev/null 2>&1 \
+            || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${SIG_REPO}" >/dev/null
 
       - name: Ensure lifecycle policy (keep last 10 backend-/frontend- tags)
         shell: bash
@@ -100,18 +110,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Compute tags
+      - name: Compute tags (pretty immutable + branch + sha)
         id: vars
         shell: bash
         run: |
           set -euo pipefail
           sha="${GITHUB_SHA:0:7}"
+          branch="$(echo "${GITHUB_REF_NAME:-master}" | tr '/_' '--')"
+          date_tag="$(date -u +%Y%m%d-%H%M%S)"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "date_tag=$date_tag" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
           reg="${{ steps.login-ecr.outputs.registry }}"
           if [ -z "$reg" ]; then reg="${ECR_REGISTRY}"; fi
           base="$reg/${ECR_REPOSITORY}"
           echo "registry=$reg" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
+
+          echo "backend_pretty=backend-${date_tag}-${branch}-${sha}" >> "$GITHUB_OUTPUT"
+          echo "frontend_pretty=frontend-${date_tag}-${branch}-${sha}" >> "$GITHUB_OUTPUT"
 
       - name: Build & push BACKEND (backend- tags)
         uses: docker/build-push-action@v6
@@ -123,6 +142,15 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.base }}:backend-latest
             ${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}
+            ${{ steps.vars.outputs.base }}:${{ steps.vars.outputs.backend_pretty }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.created=${{ steps.vars.outputs.build_time }}
+            org.opencontainers.image.title=student-app-backend
+            org.opencontainers.image.description=Student registration backend (Flask)
+            org.opencontainers.image.ref.name=${{ steps.vars.outputs.backend_pretty }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -136,6 +164,15 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.base }}:frontend-latest
             ${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}
+            ${{ steps.vars.outputs.base }}:${{ steps.vars.outputs.frontend_pretty }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.created=${{ steps.vars.outputs.build_time }}
+            org.opencontainers.image.title=student-app-frontend
+            org.opencontainers.image.description=Student registration frontend (nginx)
+            org.opencontainers.image.ref.name=${{ steps.vars.outputs.frontend_pretty }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -189,10 +226,11 @@ jobs:
           echo "backend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${B_DIGEST}" >> "$GITHUB_OUTPUT"
           echo "frontend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${F_DIGEST}" >> "$GITHUB_OUTPUT"
 
-      - name: Cosign sign (keyless) - private images
+      - name: Cosign sign (keyless) - private images (separate sig repo)
         shell: bash
         env:
           COSIGN_EXPERIMENTAL: "true"
+          COSIGN_REPOSITORY: ${{ env.COSIGN_REPOSITORY }}
         run: |
           set -euo pipefail
           cosign sign --yes "${{ steps.digests.outputs.backend_ref }}"
@@ -200,6 +238,8 @@ jobs:
 
       - name: Cosign verify (keyless) - sanity
         shell: bash
+        env:
+          COSIGN_REPOSITORY: ${{ env.COSIGN_REPOSITORY }}
         run: |
           set -euo pipefail
           for ref in "${{ steps.digests.outputs.backend_ref }}" "${{ steps.digests.outputs.frontend_ref }}"; do
@@ -211,14 +251,22 @@ jobs:
 
       - name: Output pushed & signed images
         run: |
-          echo "## Pushed & Signed (PRIVATE ECR)" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.vars.outputs.base }}:backend-latest" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.digests.outputs.backend_ref }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.vars.outputs.base }}:frontend-latest" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.digests.outputs.frontend_ref }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Private ECR — pushed & signed"
+            echo ""
+            echo "### Backend"
+            echo "- latest:      ${{ steps.vars.outputs.base }}:backend-latest"
+            echo "- immutable:   ${{ steps.vars.outputs.base }}:${{ steps.vars.outputs.backend_pretty }}"
+            echo "- by digest:   ${{ steps.digests.outputs.backend_ref }}"
+            echo ""
+            echo "### Frontend"
+            echo "- latest:      ${{ steps.vars.outputs.base }}:frontend-latest"
+            echo "- immutable:   ${{ steps.vars.outputs.base }}:${{ steps.vars.outputs.frontend_pretty }}"
+            echo "- by digest:   ${{ steps.digests.outputs.frontend_ref }}"
+            echo ""
+            echo "### Cosign signatures"
+            echo "- stored in:   ${{ env.COSIGN_REPOSITORY }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   mirror-third-party-public:
     needs: push-images
@@ -269,7 +317,7 @@ jobs:
           echo "alias=$alias" >> "$GITHUB_OUTPUT"
           echo "uri=${{ steps.login-ecr-public.outputs.registry }}/$alias" >> "$GITHUB_OUTPUT"
 
-      # ---- PURGE PUBLIC REPO (delete repo + all tags/images) ----
+      # Purge the single public repo before mirroring
       - name: Purge ECR Public repo (delete repository + all images)
         shell: bash
         run: |
@@ -323,3 +371,4 @@ jobs:
           else
             echo "_No images mirrored (alias or repo missing)_" >> $GITHUB_STEP_SUMMARY
           fi
+
