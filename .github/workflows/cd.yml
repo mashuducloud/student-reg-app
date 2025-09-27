@@ -75,6 +75,19 @@ jobs:
           aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 \
             || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
 
+      # NEW: purge signatures repo each run to keep it clean
+      - name: Purge PRIVATE ECR signatures repo (delete repository + all signatures)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIG_REPO="${ECR_REPOSITORY}-sig"
+          if aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${SIG_REPO}" >/dev/null 2>&1; then
+            echo "Deleting signatures repo: ${SIG_REPO}"
+            aws ecr delete-repository --region "${AWS_REGION}" --repository-name "${SIG_REPO}" --force
+          else
+            echo "Signatures repo not found; nothing to delete: ${SIG_REPO}"
+          fi
+
       - name: Ensure PRIVATE ECR signatures repo exists
         shell: bash
         run: |
