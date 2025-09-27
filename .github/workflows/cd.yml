@@ -1,0 +1,192 @@
+name: CD - Private ECR push + Public mirror (after CI)
+
+on:
+  workflow_run:
+    workflows: ["CI"]         # must match the name: of your CI workflow
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  push-images:
+    # Run when triggered manually OR when CI completed successfully on master
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      AWS_REGION: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_REGION }}
+      BACKEND_DOCKERFILE: infra/Dockerfile.backend
+      FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
+      # Private ECR single repo for both images
+      ECR_REPOSITORY: mashkenneth/student-reg-app
+      # Explicit registry for your account/region
+      ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials (private ECR)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR (private)
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure PRIVATE ECR repo exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1             || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute tags
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${GITHUB_SHA:0:7}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          reg="${{ steps.login-ecr.outputs.registry }}"
+          if [ -z "$reg" ]; then reg="${ECR_REGISTRY}"; fi
+          echo "registry=$reg" >> "$GITHUB_OUTPUT"
+          echo "base=$reg/${ECR_REPOSITORY}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push BACKEND (backend-*)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.BACKEND_DOCKERFILE }}
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.vars.outputs.base }}:backend-latest
+            ${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push FRONTEND (frontend-*)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.FRONTEND_DOCKERFILE }}
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.vars.outputs.base }}:frontend-latest
+            ${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output pushed images
+        run: |
+          echo "Pushed to PRIVATE ECR:"
+          echo "  ${{ steps.vars.outputs.base }}:backend-latest"
+          echo "  ${{ steps.vars.outputs.base }}:backend-sha-${{ steps.vars.outputs.sha }}"
+          echo "  ${{ steps.vars.outputs.base }}:frontend-latest"
+          echo "  ${{ steps.vars.outputs.base }}:frontend-sha-${{ steps.vars.outputs.sha }}"
+
+  mirror-third-party-public:
+    needs: push-images
+    if: needs.push-images.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      AWS_REGION: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_REGION }}
+      # pinned upstream tags
+      PROMETHEUS_TAG: v3.5.0
+      GRAFANA_TAG: 12.2.0
+      TEMPO_TAG: 2.8.0
+      OTELCOL_TAG: 0.135.0
+      # ECR PUBLIC single repo (requested path with slash)
+      PUBLIC_REPO_NAME: mashkenneth/public-student-reg-app
+
+    steps:
+      - name: Configure AWS credentials (public ECR)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR Public
+        id: login-ecr-public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Resolve ECR Public alias
+        id: ecr-public
+        shell: bash
+        env:
+          PROVIDED_ALIAS: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).ECR_PUBLIC_ALIAS }}
+        run: |
+          set -euo pipefail
+          alias="${PROVIDED_ALIAS:-}"
+          if [ -z "$alias" ]; then
+            alias=$(aws ecr-public describe-registries --region "$AWS_REGION"                      --query 'registries[0].aliases[0].name' --output text 2>/dev/null || true)
+          fi
+          if [ -z "$alias" ] || [ "$alias" = "None" ]; then
+            echo "::error ::ECR public alias not resolved. Add ECR_PUBLIC_ALIAS to AWS_DEPLOY_SECRET."
+            exit 1
+          fi
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          echo "uri=${{ steps.login-ecr-public.outputs.registry }}/$alias" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${{ steps.login-ecr-public.outputs.registry }}/$alias"
+
+      - name: Ensure ECR Public repository exists (single repo)
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecr-public describe-repositories --region "$AWS_REGION" --repository-names "${PUBLIC_REPO_NAME}" >/dev/null 2>&1             || aws ecr-public create-repository --region "$AWS_REGION" --repository-name "${PUBLIC_REPO_NAME}" >/dev/null
+
+      - name: Mirror upstream images → ECR Public (single repo, prefixed tags)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.ecr-public.outputs.uri }}/${{ env.PUBLIC_REPO_NAME }}"
+          mapfile -t IMAGES < <(cat <<EOF
+          prom/prometheus:${PROMETHEUS_TAG}               ${BASE}:prometheus-${PROMETHEUS_TAG}
+          grafana/grafana:${GRAFANA_TAG}                  ${BASE}:grafana-${GRAFANA_TAG}
+          grafana/tempo:${TEMPO_TAG}                      ${BASE}:tempo-${TEMPO_TAG}
+          otel/opentelemetry-collector:${OTELCOL_TAG}     ${BASE}:otelcol-${OTELCOL_TAG}
+          EOF
+          )
+          for row in "${IMAGES[@]}"; do
+            src=$(echo "$row" | awk '{print $1}')
+            dst=$(echo "$row" | awk '{print $2}')
+            echo "Mirroring $src -> $dst"
+            docker pull --platform linux/amd64 "$src"
+            docker tag "$src" "$dst"
+            docker push "$dst"
+          done
+
+      - name: Output mirrored image tags
+        shell: bash
+        run: |
+          BASE="${{ steps.ecr-public.outputs.uri }}/${{ env.PUBLIC_REPO_NAME }}"
+          echo "Public ECR (single repo) images:"
+          echo "  ${BASE}:prometheus-${PROMETHEUS_TAG}"
+          echo "  ${BASE}:grafana-${GRAFANA_TAG}"
+          echo "  ${BASE}:tempo-${TEMPO_TAG}"
+          echo "  ${BASE}:otelcol-${OTELCOL_TAG}"
