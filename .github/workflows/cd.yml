@@ -1,8 +1,8 @@
-name: CD - Private ECR push + Public mirror (after CI, hardened, signed, clean)
+name: CD - Private ECR push + Public mirror (after CI, hardened, signed)
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["CI"]         # must match your CI workflow name
     types: [completed]
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write  # for Cosign keyless (GitHub OIDC)
 
 jobs:
   push-images:
@@ -31,7 +31,7 @@ jobs:
       FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
       ECR_REPOSITORY: mashkenneth/student-reg-app
       ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
-      IMAGE_SIZE_LIMIT: "838860800"
+      IMAGE_SIZE_LIMIT: "838860800"   # 800 MiB literal (no math in expressions)
       COSIGN_EXPERIMENTAL: "true"
       COSIGN_YES: "true"
 
@@ -56,7 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1             || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
+          aws ecr describe-repositories --region "${AWS_REGION}" --repository-names "${ECR_REPOSITORY}" >/dev/null 2>&1 \
+            || aws ecr create-repository --region "${AWS_REGION}" --repository-name "${ECR_REPOSITORY}" >/dev/null
 
       - name: Ensure lifecycle policy (keep last 10 backend/frontend tags)
         shell: bash
@@ -188,7 +189,10 @@ jobs:
         run: |
           set -euo pipefail
           for ref in "${{ steps.digests.outputs.backend_ref }}" "${{ steps.digests.outputs.frontend_ref }}"; do
-            cosign verify               --certificate-oidc-issuer https://token.actions.githubusercontent.com               --certificate-identity-regexp "https://github.com/.+"               "$ref" >/dev/null
+            cosign verify \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity-regexp "https://github.com/.+" \
+              "$ref" >/dev/null
           done
 
       - name: Output pushed & signed images
@@ -241,9 +245,11 @@ jobs:
           set -euo pipefail
           alias="${PROVIDED_ALIAS:-}"
           if [ -z "$alias" ]; then
-            alias=$(aws ecr-public describe-registries --region "$AWS_REGION"                      --query 'registries[0].aliases[0].name' --output text 2>/dev/null || true)
+            alias=$(aws ecr-public describe-registries --region "$AWS_REGION" \
+                     --query 'registries[0].aliases[0].name' --output text 2>/dev/null || true)
           fi
           if [ -z "$alias" ] || [ "$alias" = "None" ]; then
+            echo "::warning ::ECR public alias not resolved; skipping mirroring."
             exit 0
           fi
           echo "alias=$alias" >> "$GITHUB_OUTPUT"
@@ -253,28 +259,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws ecr-public describe-repositories --region "$AWS_REGION" --repository-names "${PUBLIC_REPO_NAME}" >/dev/null 2>&1             || aws ecr-public create-repository --region "$AWS_REGION" --repository-name "${PUBLIC_REPO_NAME}" >/dev/null
+          aws ecr-public describe-repositories --region "$AWS_REGION" --repository-names "${PUBLIC_REPO_NAME}" >/dev/null 2>&1 \
+            || aws ecr-public create-repository --region "$AWS_REGION" --repository-name "${PUBLIC_REPO_NAME}" >/dev/null
 
-      - name: Mirror upstream images → ECR Public (prefix tags)
+      - name: Mirror upstream images → ECR Public (prefix tags)  # no heredoc; variables expand safely
         shell: bash
         run: |
           set -euo pipefail
           BASE="${{ steps.ecr-public.outputs.uri }}/${{ env.PUBLIC_REPO_NAME }}"
-          while read -r line; do
-            src=$(echo "$line" | awk '{print $1}')
-            prefix=$(echo "$line" | awk '{print $2}')
+          images=(
+            "prom/prometheus:${PROMETHEUS_TAG} prometheus"
+            "grafana/grafana:${GRAFANA_TAG} grafana"
+            "grafana/tempo:${TEMPO_TAG} tempo"
+            "otel/opentelemetry-collector:${OTELCOL_TAG} otelcol"
+          )
+          for item in "${images[@]}"; do
+            src="${item% *}"; prefix="${item##* }"
+            echo "Processing $src (prefix=$prefix)"
             docker pull --platform linux/amd64 "$src"
-            tag="${prefix}-$(echo "$src" | awk -F: '{print $2}')"
-            dst="${BASE}:${tag}"
+            tag_part="${src##*:}"
+            dst="${BASE}:${prefix}-${tag_part}"
             docker tag "$src" "$dst"
             docker push "$dst"
             printf "%s %s\n" "$dst" "$src" >> mirrored.txt
-          done <<'LIST'
-          prom/prometheus:${PROMETHEUS_TAG}           prometheus
-          grafana/grafana:${GRAFANA_TAG}              grafana
-          grafana/tempo:${TEMPO_TAG}                  tempo
-          otel/opentelemetry-collector:${OTELCOL_TAG} otelcol
-          LIST
+          done
 
       - name: Summary of mirrored images
         if: always()
@@ -287,3 +295,4 @@ jobs:
           else
             echo "_No images mirrored (alias or repo missing)_" >> $GITHUB_STEP_SUMMARY
           fi
+
