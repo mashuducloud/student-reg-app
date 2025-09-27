@@ -1,23 +1,32 @@
 # Backend Dockerfile for Flask app
 FROM python:3.11-slim
 
-# Install curl for healthchecks
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+# System deps for healthchecks & TLS
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
-WORKDIR /app
+# Runtime hygiene
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_HOME=/app
+WORKDIR ${APP_HOME}
 
-# Install dependencies
+# Install Python deps
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Copy app source
+# App source
 COPY backend/ .
 
-# Expose Flask port
+# Optional: in-image healthcheck (compose can override if you already have one)
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=8 \
+  CMD curl -fsS http://127.0.0.1:5000/health || exit 1
+
+# App port
 EXPOSE 5000
 
-# Run Flask
+# Start (same as you had)
 CMD ["python", "main.py"]
-
