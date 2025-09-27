@@ -1,8 +1,8 @@
-name: CD - Private ECR push + Public mirror (after CI, hardened, signed)
+name: CD - Private ECR push + Public mirror (after CI, hardened, signed, clean)
 
 on:
   workflow_run:
-    workflows: ["CI"]         # must match the name: of your CI workflow
+    workflows: ["CI"]
     types: [completed]
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write  # required for Cosign keyless signing (GitHub OIDC)
+  id-token: write
 
 jobs:
   push-images:
@@ -31,7 +31,7 @@ jobs:
       FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
       ECR_REPOSITORY: mashkenneth/student-reg-app
       ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
-      IMAGE_SIZE_LIMIT: ${{ 800 * 1024 * 1024 }}
+      IMAGE_SIZE_LIMIT: "838860800"
       COSIGN_EXPERIMENTAL: "true"
       COSIGN_YES: "true"
 
@@ -67,13 +67,13 @@ jobs:
             "rules": [
               {
                 "rulePriority": 10,
-                "description": "Expire old backend-* tags, keep last 10",
+                "description": "Expire old backend- tags, keep last 10",
                 "selection": { "tagStatus": "tagged", "tagPrefixList": ["backend-"], "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }
               },
               {
                 "rulePriority": 20,
-                "description": "Expire old frontend-* tags, keep last 10",
+                "description": "Expire old frontend- tags, keep last 10",
                 "selection": { "tagStatus": "tagged", "tagPrefixList": ["frontend-"], "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }
               }
@@ -98,7 +98,7 @@ jobs:
           echo "registry=$reg" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      - name: Build & push BACKEND (backend-*)
+      - name: Build & push BACKEND (backend- tags)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -111,7 +111,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build & push FRONTEND (frontend-*)
+      - name: Build & push FRONTEND (frontend- tags)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -158,7 +158,6 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-      # ---- Cosign: install, sign by digest, verify ----
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
@@ -174,8 +173,6 @@ jobs:
           F_DIGEST=$(aws ecr batch-get-image --repository-name "$REPO" --image-ids imageTag="$FRONTEND_TAG" --query 'images[0].imageId.imageDigest' --output text)
           echo "backend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${B_DIGEST}" >> "$GITHUB_OUTPUT"
           echo "frontend_ref=${{ steps.vars.outputs.registry }}/${ECR_REPOSITORY}@${F_DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "Backend digest: $B_DIGEST"
-          echo "Frontend digest: $F_DIGEST"
 
       - name: Cosign sign (keyless) - private images
         shell: bash
@@ -191,9 +188,7 @@ jobs:
         run: |
           set -euo pipefail
           for ref in "${{ steps.digests.outputs.backend_ref }}" "${{ steps.digests.outputs.frontend_ref }}"; do
-            echo "Verifying signature for $ref"
             cosign verify               --certificate-oidc-issuer https://token.actions.githubusercontent.com               --certificate-identity-regexp "https://github.com/.+"               "$ref" >/dev/null
-            echo "Verified: $ref"
           done
 
       - name: Output pushed & signed images
@@ -221,7 +216,7 @@ jobs:
       GRAFANA_TAG: 12.2.0
       TEMPO_TAG: 2.8.0
       OTELCOL_TAG: 0.135.0
-      PUBLIC_REPO_NAME: mashkenneth/public-student-reg-app  # NOTE: ECR Public repo names cannot include '/', change if this errors.
+      PUBLIC_REPO_NAME: mashkenneth-public-student-reg-app
 
     steps:
       - name: Configure AWS credentials (public ECR)
@@ -249,7 +244,6 @@ jobs:
             alias=$(aws ecr-public describe-registries --region "$AWS_REGION"                      --query 'registries[0].aliases[0].name' --output text 2>/dev/null || true)
           fi
           if [ -z "$alias" ] || [ "$alias" = "None" ]; then
-            echo "::warning ::ECR public alias not resolved; skipping mirroring."
             exit 0
           fi
           echo "alias=$alias" >> "$GITHUB_OUTPUT"
@@ -272,7 +266,6 @@ jobs:
             docker pull --platform linux/amd64 "$src"
             tag="${prefix}-$(echo "$src" | awk -F: '{print $2}')"
             dst="${BASE}:${tag}"
-            echo "Mirroring $src -> $dst"
             docker tag "$src" "$dst"
             docker push "$dst"
             printf "%s %s\n" "$dst" "$src" >> mirrored.txt
