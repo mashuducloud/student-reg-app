@@ -24,16 +24,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4.1.1
 
-      - name: Prepare .env for docker-compose
+      # Use INDIVIDUAL secrets. This job fails fast if they're missing.
+      - name: Prepare .env for docker-compose (from secrets)
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         run: |
-          if [ -z "${DB_PASSWORD}" ] || [ -z "${MYSQL_ROOT_PASSWORD}" ]; then
-            echo "::error::Missing DB_PASSWORD or MYSQL_ROOT_PASSWORD secrets."
+          set -euo pipefail
+          if [ -z "${DB_PASSWORD:-}" ] || [ -z "${MYSQL_ROOT_PASSWORD:-}" ]; then
+            echo "::error::Missing required secrets: DB_PASSWORD and/or MYSQL_ROOT_PASSWORD."
+            echo "Add them in Settings → Secrets and variables → Actions."
             exit 1
           fi
+
+          # Mask in logs
+          echo "::add-mask::${DB_PASSWORD}"
+          echo "::add-mask::${MYSQL_ROOT_PASSWORD}"
+
           mkdir -p infra
           umask 077
           cat > infra/.env <<EOF
@@ -44,7 +51,7 @@ jobs:
           DB_PASSWORD=${DB_PASSWORD}
           MYSQL_DATABASE=student_registration_db
           MYSQL_USER=student
-          MYSQL_PASSWORD=${MYSQL_PASSWORD}
+          MYSQL_PASSWORD=${DB_PASSWORD}
           MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
           MYSQL_ROOT_HOST=%
           EOF
@@ -59,7 +66,9 @@ jobs:
           docker compose -f infra/docker-compose.yml ps
 
       - name: Make helper scripts executable
-        run: chmod +x .github/scripts/health-check.sh
+        run: |
+          chmod +x .github/scripts/health-check.sh || true
+          chmod +x .github/scripts/verify-targets.py || true
 
       - name: Smoke health (Prometheus / OTEL / app)
         run: ./.github/scripts/health-check.sh
