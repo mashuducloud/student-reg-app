@@ -1,36 +1,58 @@
 #!/usr/bin/env python3
-import html, json, subprocess, urllib.request, pathlib
+import pathlib, datetime
 
-def run(cmd):
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
+root = pathlib.Path.cwd()
+compose_cfg = root / "compose.config.yaml"
+cov_xml = root / "coverage" / "coverage.xml"
+cov_html_dir = root / "coverage" / "htmlcov"
+out = root / "ci-report.html"
 
-cfg = run(["docker","compose","-f","infra/docker-compose.yml","config"])
-ps  = run(["docker","compose","-f","infra/docker-compose.yml","ps"])
-imgs= run(["docker","compose","-f","infra/docker-compose.yml","images"])
+ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
 
-try:
-    raw = urllib.request.urlopen("http://localhost:9091/api/v1/targets?state=active", timeout=10).read().decode()
-    targets = json.dumps(json.loads(raw), indent=2)
-except Exception as e:
-    targets = f"error fetching targets: {e}"
+rows = []
+def add_row(name, path):
+    exists = path.exists()
+    rows.append( (name, str(path.relative_to(root)), "YES" if exists else "NO") )
 
-html_doc = f"""<!doctype html><meta charset="utf-8">
-<title>CI Infra Report</title>
+add_row("Compose (rendered) config", compose_cfg)
+add_row("Coverage XML", cov_xml)
+add_row("Coverage HTML index", cov_html_dir / "index.html")
+
+def row_html(name, path, ok):
+    cls = "ok" if ok == "YES" else "no"
+    return f"<tr><td>{name}</td><td><a href=\"{path}\">{path}</a></td><td><span class=\"badge {cls}\">{ok}</span></td></tr>"
+
+html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>CI Report - {ts}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  body{{font:14px/1.5 system-ui,Segoe UI,Arial,sans-serif;margin:24px;max-width:1100px}}
-  h1,h2{{margin:16px 0 8px}}
-  pre{{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto;border:1px solid #eaecef}}
-  code{{font-family:ui-monospace,Menlo,Consolas,monospace}}
+body {{ font-family: Arial, Helvetica, sans-serif; padding: 24px; }}
+h1 {{ margin: 0 0 12px; font-size: 20px; }}
+table {{ border-collapse: collapse; width: 100%; max-width: 900px; }}
+th, td {{ border: 1px solid #ddd; padding: 8px; }}
+th {{ background: #f8f8f8; text-align: left; }}
+.badge {{ display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; color:#fff; }}
+.ok {{ background:#16a34a; }}
+.no {{ background:#dc2626; }}
+small {{ color:#666; }}
 </style>
-<h1>CI Infra Report</h1>
-<h2>Compose Config (sanity)</h2>
-<pre><code>{html.escape(cfg)}</code></pre>
-<h2>Services (docker compose ps)</h2>
-<pre><code>{html.escape(ps)}</code></pre>
-<h2>Images (docker compose images)</h2>
-<pre><code>{html.escape(imgs)}</code></pre>
-<h2>Prometheus Active Targets</h2>
-<pre><code>{html.escape(targets)}</code></pre>
+</head>
+<body>
+  <h1>CI Report <small>({ts})</small></h1>
+  <p>This report summarizes artifacts produced by the Infra Smoke & Tests job.</p>
+  <table>
+    <thead><tr><th>Artifact</th><th>Path</th><th>Status</th></tr></thead>
+    <tbody>
+      {''.join(row_html(name, path, ok) for name, path, ok in rows)}
+    </tbody>
+  </table>
+  <p>If Coverage HTML is present, open <a href="coverage/htmlcov/index.html">coverage/htmlcov/index.html</a>.</p>
+</body>
+</html>
 """
-pathlib.Path("ci-report.html").write_text(html_doc, encoding="utf-8")
-print("Wrote ci-report.html")
+
+out.write_text(html, encoding="utf-8")
+print(str(out))
