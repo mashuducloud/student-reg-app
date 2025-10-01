@@ -220,7 +220,7 @@ jobs:
         run: docker compose -f infra/docker-compose.yml down -v
 
   # ────────────────────────────────────────────────────────────────────────────
-  # 4) Auto PR dev → default (PAT_PR; no cross-step outputs)
+  # 4) Auto PR dev → default (PAT_PR with fallback to GITHUB_TOKEN)
   # ────────────────────────────────────────────────────────────────────────────
   open-pr-when-ahead:
     name: Auto PR dev → default
@@ -232,29 +232,28 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Ensure PAT_PR is present
+      - id: pick-token
+        name: Choose auth token (PAT if set, else GITHUB_TOKEN)
         run: |
-          if [ -z "${{ secrets.PAT_PR }}" ]; then
-            echo "PAT_PR is not set. Create repo secret PAT_PR (fine-grained, Contents & Pull requests: Read/Write)." >&2
-            exit 1
+          if [ -n "${{ secrets.PAT_PR }}" ]; then
+            echo "token=${{ secrets.PAT_PR }}" >> "$GITHUB_OUTPUT"
+            echo "Using PAT_PR"
+          else
+            echo "token=${{ github.token }}" >> "$GITHUB_OUTPUT"
+            echo "PAT_PR not set; falling back to GITHUB_TOKEN"
           fi
 
       - name: Open or reuse PR (compute compare inline)
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_PR }}
+          github-token: ${{ steps.pick-token.outputs.token }}
           script: |
             const { owner, repo } = context.repo;
-
             // Resolve default branch
             const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
             const base = repoData.default_branch;
             const head = 'dev';
-
-            if (base === head) {
-              core.info(`Default branch (${base}) equals head (${head}); skipping.`);
-              return;
-            }
+            if (base === head) { core.info(`base==head (${base}); skipping.`); return; }
 
             // Compare dev → base
             const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', {
@@ -262,11 +261,7 @@ jobs:
             });
             const aheadBy = Number(cmp?.ahead_by ?? 0);
             core.info(`dev is ahead of ${base} by ${aheadBy} commits`);
-
-            if (!(aheadBy > 0)) {
-              core.info('Not ahead; nothing to PR.');
-              return;
-            }
+            if (!(aheadBy > 0)) { core.info('Not ahead; nothing to PR.'); return; }
 
             // Reuse existing PR if present
             const { data: prs } = await github.rest.pulls.list({
@@ -279,12 +274,7 @@ jobs:
 
             // Create PR
             const title = `Auto PR: ${head} → ${base} (CI)`;
-            const body =
-              `This PR was opened by CI after checks on **${head}** passed.` +
-              `\n\nBase: ${base}` +
-              `\nCommit: ${context.sha}` +
-              `\nActor: @${context.actor}`;
-
+            const body = `Opened by CI.\n\nBase: ${base}\nCommit: ${context.sha}\nActor: @${context.actor}`;
             try {
               const { data: pr } = await github.rest.pulls.create({
                 owner, repo, head, base, title, body
