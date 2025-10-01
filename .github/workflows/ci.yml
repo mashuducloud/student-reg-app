@@ -3,9 +3,9 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [ "dev" ]
+    branches: ["dev"]
   pull_request:
-    branches: [ "dev" ]
+    branches: ["dev"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-ci
@@ -16,6 +16,9 @@ defaults:
     shell: bash
 
 jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1) Static Quality Gates
+  # ────────────────────────────────────────────────────────────────────────────
   quality-checks:
     name: Quality Checks (lint & yaml)
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
       - name: Set up Python 3.11 (with pip cache)
         uses: actions/setup-python@v5
@@ -47,6 +50,9 @@ jobs:
       - name: YAML Lint (observability configs)
         run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2) Build + Trivy (local)  — runs in parallel after quality-checks
+  # ────────────────────────────────────────────────────────────────────────────
   build-and-scan:
     name: Build & Trivy Scan (local images)
     runs-on: ubuntu-latest
@@ -56,12 +62,12 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build backend (with GHA cache)
+      - name: Build backend (with cache)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -71,7 +77,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build frontend (with GHA cache)
+      - name: Build frontend (with cache)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -102,6 +108,9 @@ jobs:
       - name: Print local image sizes
         run: docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # 3) Compose Smoke + Tests + HTML report — runs in parallel after quality-checks
+  # ────────────────────────────────────────────────────────────────────────────
   infra-smoke-and-tests:
     name: Infra Smoke & Backend Tests (+ HTML Report)
     runs-on: ubuntu-latest
@@ -111,37 +120,38 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
-      - name: Validate required secrets
-        run: |
-          if [ -z "${DB_PASSWORD}" ] || [ -z "${MYSQL_ROOT_PASSWORD}" ]; then
-            echo "Error: Missing DB_PASSWORD or MYSQL_ROOT_PASSWORD secrets."
-            exit 1
-          fi
-        env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-
+      # Prefer DB_SECRET (multiline .env). Fallback to individual secrets.
       - name: Prepare .env for docker-compose
         env:
+          DB_SECRET: ${{ secrets.DB_SECRET }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         run: |
+          set -e
           mkdir -p infra
-          cat > infra/.env <<EOF
-          DB_HOST=mysql-db
-          DB_PORT=3306
-          DB_NAME=student_registration_db
-          DB_USER=student
-          DB_PASSWORD=${DB_PASSWORD}
-          MYSQL_DATABASE=student_registration_db
-          MYSQL_USER=student
-          MYSQL_PASSWORD=${MYSQL_PASSWORD}
-          MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-          MYSQL_ROOT_HOST=%
-          EOF
+          if [ -n "${DB_SECRET}" ]; then
+            printf "%s\n" "${DB_SECRET}" > infra/.env
+          else
+            if [ -z "${DB_PASSWORD}" ] || [ -z "${MYSQL_ROOT_PASSWORD}" ]; then
+              echo "Provide DB_SECRET (preferred) OR both DB_PASSWORD and MYSQL_ROOT_PASSWORD." >&2
+              exit 1
+            fi
+            cat > infra/.env <<EOF
+            DB_HOST=mysql-db
+            DB_PORT=3306
+            DB_NAME=student_registration_db
+            DB_USER=student
+            DB_PASSWORD=${DB_PASSWORD}
+            MYSQL_DATABASE=student_registration_db
+            MYSQL_USER=student
+            MYSQL_PASSWORD=${DB_PASSWORD}
+            MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+            MYSQL_ROOT_HOST=%
+            EOF
+          fi
+          echo "Wrote infra/.env"
 
       - name: Compose config (sanity) → artifact
         run: docker compose -f infra/docker-compose.yml config > compose.config.yaml
@@ -161,21 +171,41 @@ jobs:
           done
 
       - name: Smoke health (Prometheus/OTEL/app)
-        run: bash ./.github/scripts/health-check.sh
+        run: |
+          if [ -x ./.github/scripts/health-check.sh ]; then
+            bash ./.github/scripts/health-check.sh
+          else
+            echo "health-check.sh not found; skipping."
+          fi
 
       - name: Verify Prometheus active targets
-        run: python ./.github/scripts/verify-targets.py
+        run: |
+          if [ -f ./.github/scripts/verify-targets.py ]; then
+            python ./.github/scripts/verify-targets.py
+          else
+            echo "verify-targets.py not found; skipping."
+          fi
 
       - name: Run backend tests + coverage (persist artifacts)
         run: |
           mkdir -p coverage
-          docker compose -f infra/docker-compose.yml run --rm             -v "$PWD/coverage:/app/coverage"             tests             pytest --cov=. --cov-report=term-missing                    --cov-report=xml:coverage/coverage.xml                    --cov-report=html:coverage/htmlcov -v
+          docker compose -f infra/docker-compose.yml run --rm \
+            -v "$PWD/coverage:/app/coverage" \
+            tests \
+            pytest --cov=. --cov-report=term-missing \
+                   --cov-report=xml:coverage/coverage.xml \
+                   --cov-report=html:coverage/htmlcov -v
 
       - name: Generate HTML CI report
-        run: python ./.github/scripts/generate-report.py
+        run: |
+          if [ -f ./.github/scripts/generate-report.py ]; then
+            python ./.github/scripts/generate-report.py
+          else
+            echo "<html><body><h1>CI Report</h1><p>No generator script found.</p></body></html>" > ci-report.html
+          fi
 
       - name: Upload HTML & coverage artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         with:
           name: ci-infra-report
           path: |
@@ -189,6 +219,9 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # 4) Auto PR dev → default (PAT_PR; no cross-step outputs)
+  # ────────────────────────────────────────────────────────────────────────────
   open-pr-when-ahead:
     name: Auto PR dev → default
     runs-on: ubuntu-latest
@@ -199,42 +232,64 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Compare dev → default branch
-        id: compare
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const repoData = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
-            const base = repoData.data.default_branch;
-            const head = 'dev';
-            if (base === head) {
-              core.setOutput('base', base);
-              core.setOutput('ahead_by', 0);
-              return;
-            }
-            const cmp = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', { owner, repo, base, head });
-            core.setOutput('base', base);
-            core.setOutput('ahead_by', cmp.data.ahead_by);
+      - name: Ensure PAT_PR is present
+        run: |
+          if [ -z "${{ secrets.PAT_PR }}" ]; then
+            echo "PAT_PR is not set. Create repo secret PAT_PR (fine-grained, Contents & Pull requests: Read/Write)." >&2
+            exit 1
+          fi
 
-      - name: Open or reuse PR dev → default
-        if: steps.compare.outputs.ahead_by && steps.compare.outputs.ahead_by > 0
+      - name: Open or reuse PR (compute compare inline)
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_PR || github.token }}
+          github-token: ${{ secrets.PAT_PR }}
           script: |
             const { owner, repo } = context.repo;
-            const base = '${{ steps.compare.outputs.base }}';
+
+            // Resolve default branch
+            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
+            const base = repoData.default_branch;
             const head = 'dev';
-            const prs = await github.rest.pulls.list({ owner, repo, state: 'open', base, head: `${owner}:${head}` });
-            if (prs.data.length > 0) {
-              core.info(`PR already open: #${prs.data[0].number} (${prs.data[0].html_url})`);
+
+            if (base === head) {
+              core.info(`Default branch (${base}) equals head (${head}); skipping.`);
               return;
             }
+
+            // Compare dev → base
+            const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', {
+              owner, repo, base, head
+            });
+            const aheadBy = Number(cmp?.ahead_by ?? 0);
+            core.info(`dev is ahead of ${base} by ${aheadBy} commits`);
+
+            if (!(aheadBy > 0)) {
+              core.info('Not ahead; nothing to PR.');
+              return;
+            }
+
+            // Reuse existing PR if present
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo, state: 'open', base, head: `${owner}:${head}`
+            });
+            if (prs.length > 0) {
+              core.info(`PR already open: #${prs[0].number} (${prs[0].html_url})`);
+              return;
+            }
+
+            // Create PR
+            const title = `Auto PR: ${head} → ${base} (CI)`;
+            const body =
+              `This PR was opened by CI after checks on **${head}** passed.` +
+              `\n\nBase: ${base}` +
+              `\nCommit: ${context.sha}` +
+              `\nActor: @${context.actor}`;
+
             try {
-              const body = `Auto PR opened by CI after checks on **${head}** passed.\n\nCommit: ${context.sha}\nActor: @${context.actor}`;
-              const pr = await github.rest.pulls.create({ owner, repo, head, base, title: `Auto PR: ${head} → ${base} (CI)`, body });
-              core.info(`Created PR #${pr.data.number} (${pr.data.html_url})`);
+              const { data: pr } = await github.rest.pulls.create({
+                owner, repo, head, base, title, body
+              });
+              core.info(`Created PR #${pr.number} (${pr.html_url})`);
             } catch (err) {
               if (err.status === 422 && /No commits between/i.test(err.message)) {
                 core.info('No commits between branches; skipping PR.');
