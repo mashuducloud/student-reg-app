@@ -17,7 +17,7 @@ defaults:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # 1) Static Quality Gates
+  # 1) Static Quality Gates (lint + yaml + basic security)
   # ────────────────────────────────────────────────────────────────────────────
   quality-checks:
     name: Quality Checks (lint & yaml)
@@ -39,6 +39,7 @@ jobs:
       - name: Install linters & tools
         run: |
           python -m pip install --upgrade pip
+          # Keep CI tooling separate from app deps
           pip install -r backend/requirements-ci.txt
 
       - name: Python Lint (flake8)
@@ -122,8 +123,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4.1.1
 
-      # Prefer DB_SECRET (multiline .env). Fallback to individual secrets.
-      - name: Prepare .env for docker-compose (no heredoc)
+      # Prefer DB_SECRET (.env as one secret). Else require DB_PASSWORD + MYSQL_ROOT_PASSWORD.
+      - name: Prepare .env for docker-compose (safe, no heredoc)
         env:
           DB_SECRET: ${{ secrets.DB_SECRET }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -131,11 +132,11 @@ jobs:
         run: |
           set -e
           mkdir -p infra
-          if [ -n "${DB_SECRET}" ]; then
+          if [ -n "${DB_SECRET:-}" ]; then
             printf "%s\n" "${DB_SECRET}" > infra/.env
           else
-            if [ -z "${DB_PASSWORD}" ] || [ -z "${MYSQL_ROOT_PASSWORD}" ]; then
-              echo "Provide DB_SECRET (preferred) OR both DB_PASSWORD and MYSQL_ROOT_PASSWORD." >&2
+            if [ -z "${DB_PASSWORD:-}" ] || [ -z "${MYSQL_ROOT_PASSWORD:-}" ]; then
+              echo "Error: Provide DB_SECRET (preferred) OR both DB_PASSWORD and MYSQL_ROOT_PASSWORD." >&2
               exit 1
             fi
             {
@@ -161,7 +162,7 @@ jobs:
           docker compose -f infra/docker-compose.yml up -d
           docker compose -f infra/docker-compose.yml ps
 
-      - name: Prepare helper scripts (LF + +x)
+      - name: Prepare helper scripts (normalize CRLF and +x)
         run: |
           set -e
           shopt -s nullglob
@@ -220,10 +221,10 @@ jobs:
         run: docker compose -f infra/docker-compose.yml down -v
 
   # ────────────────────────────────────────────────────────────────────────────
-  # 4) Auto PR dev → default (PAT_PR with fallback to GITHUB_TOKEN)
+  # 4) Auto PR dev → default (uses built-in GITHUB_TOKEN)
   # ────────────────────────────────────────────────────────────────────────────
   open-pr-when-ahead:
-    name: Auto PR dev → default
+    name: Auto PR dev → default (GITHUB_TOKEN)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [quality-checks, build-and-scan, infra-smoke-and-tests]
@@ -232,24 +233,14 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - id: pick-token
-        name: Choose auth token (PAT if set, else GITHUB_TOKEN)
-        run: |
-          if [ -n "${{ secrets.PAT_PR }}" ]; then
-            echo "token=${{ secrets.PAT_PR }}" >> "$GITHUB_OUTPUT"
-            echo "Using PAT_PR"
-          else
-            echo "token=${{ github.token }}" >> "$GITHUB_OUTPUT"
-            echo "PAT_PR not set; falling back to GITHUB_TOKEN"
-          fi
-
       - name: Open or reuse PR (compute compare inline)
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.pick-token.outputs.token }}
+          github-token: ${{ github.token }}
           script: |
             const { owner, repo } = context.repo;
-            // Resolve default branch
+
+            // Resolve default branch (base)
             const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
             const base = repoData.default_branch;
             const head = 'dev';
@@ -263,7 +254,7 @@ jobs:
             core.info(`dev is ahead of ${base} by ${aheadBy} commits`);
             if (!(aheadBy > 0)) { core.info('Not ahead; nothing to PR.'); return; }
 
-            // Reuse existing PR if present
+            // Reuse existing open PR if present
             const { data: prs } = await github.rest.pulls.list({
               owner, repo, state: 'open', base, head: `${owner}:${head}`
             });
@@ -276,9 +267,7 @@ jobs:
             const title = `Auto PR: ${head} → ${base} (CI)`;
             const body = `Opened by CI.\n\nBase: ${base}\nCommit: ${context.sha}\nActor: @${context.actor}`;
             try {
-              const { data: pr } = await github.rest.pulls.create({
-                owner, repo, head, base, title, body
-              });
+              const { data: pr } = await github.rest.pulls.create({ owner, repo, head, base, title, body });
               core.info(`Created PR #${pr.number} (${pr.html_url})`);
             } catch (err) {
               if (err.status === 422 && /No commits between/i.test(err.message)) {
