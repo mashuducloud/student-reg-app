@@ -51,7 +51,7 @@ jobs:
         run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
   # ────────────────────────────────────────────────────────────────────────────
-  # 2) Build + Trivy (local)  — runs in parallel after quality-checks
+  # 2) Build + Trivy (local) — runs in parallel after quality-checks
   # ────────────────────────────────────────────────────────────────────────────
   build-and-scan:
     name: Build & Trivy Scan (local images)
@@ -123,7 +123,7 @@ jobs:
         uses: actions/checkout@v4.1.1
 
       # Prefer DB_SECRET (multiline .env). Fallback to individual secrets.
-      - name: Prepare .env for docker-compose
+      - name: Prepare .env for docker-compose (no heredoc)
         env:
           DB_SECRET: ${{ secrets.DB_SECRET }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
@@ -138,18 +138,18 @@ jobs:
               echo "Provide DB_SECRET (preferred) OR both DB_PASSWORD and MYSQL_ROOT_PASSWORD." >&2
               exit 1
             fi
-            cat > infra/.env <<EOF
-            DB_HOST=mysql-db
-            DB_PORT=3306
-            DB_NAME=student_registration_db
-            DB_USER=student
-            DB_PASSWORD=${DB_PASSWORD}
-            MYSQL_DATABASE=student_registration_db
-            MYSQL_USER=student
-            MYSQL_PASSWORD=${DB_PASSWORD}
-            MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-            MYSQL_ROOT_HOST=%
-            EOF
+            {
+              printf 'DB_HOST=mysql-db\n'
+              printf 'DB_PORT=3306\n'
+              printf 'DB_NAME=student_registration_db\n'
+              printf 'DB_USER=student\n'
+              printf 'DB_PASSWORD=%s\n' "${DB_PASSWORD}"
+              printf 'MYSQL_DATABASE=student_registration_db\n'
+              printf 'MYSQL_USER=student\n'
+              printf 'MYSQL_PASSWORD=%s\n' "${DB_PASSWORD}"
+              printf 'MYSQL_ROOT_PASSWORD=%s\n' "${MYSQL_ROOT_PASSWORD}"
+              printf 'MYSQL_ROOT_HOST=%%\n'
+            } > infra/.env
           fi
           echo "Wrote infra/.env"
 
