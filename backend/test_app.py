@@ -23,7 +23,7 @@ def test_register_missing_fields(client):
     response = client.post(
         "/register",
         data=json.dumps({"first_name": "John"}),  # missing last_name, email
-        content_type="application/json"
+        content_type="application/json",
     )
     assert response.status_code == 400
     assert b"required" in response.data
@@ -56,12 +56,10 @@ def test_register_success(monkeypatch, client):
 
     response = client.post(
         "/register",
-        data=json.dumps({
-            "first_name": "Jane",
-            "last_name": "Doe",
-            "email": "jane.doe@example.com"
-        }),
-        content_type="application/json"
+        data=json.dumps(
+            {"first_name": "Jane", "last_name": "Doe", "email": "jane.doe@example.com"}
+        ),
+        content_type="application/json",
     )
 
     assert response.status_code == 201
@@ -76,12 +74,10 @@ def test_register_db_failure(monkeypatch, client):
 
     response = client.post(
         "/register",
-        data=json.dumps({
-            "first_name": "Fail",
-            "last_name": "Case",
-            "email": "fail@example.com"
-        }),
-        content_type="application/json"
+        data=json.dumps(
+            {"first_name": "Fail", "last_name": "Case", "email": "fail@example.com"}
+        ),
+        content_type="application/json",
     )
 
     assert response.status_code == 500
@@ -101,6 +97,7 @@ def test_create_db_connection_success(monkeypatch):
             return DummyConnection()
 
     import main
+
     monkeypatch.setattr(main.mysql, "connector", DummyConnector)
 
     conn = create_db_connection()
@@ -117,6 +114,7 @@ def test_create_db_connection_failure(monkeypatch):
             raise Exception("DB connection failed")
 
     import main
+
     monkeypatch.setattr(main.mysql, "connector", DummyConnector)
 
     conn = create_db_connection()

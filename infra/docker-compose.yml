@@ -61,13 +61,13 @@ services:
         condition: service_healthy
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
 
   otel-collector:
-    image: otel/opentelemetry-collector:latest
+    image: otel/opentelemetry-collector:0.135.0
     container_name: otel-collector
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
@@ -80,7 +80,7 @@ services:
       - observability-network
 
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.8.0
     container_name: infra-tempo
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
@@ -92,7 +92,7 @@ services:
       - observability-network
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.5.0
     container_name: infra-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -105,7 +105,7 @@ services:
       - observability-network
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.2.0
     container_name: infra-grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin

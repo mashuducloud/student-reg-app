@@ -3,7 +3,6 @@ import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import mysql.connector
-from mysql.connector import Error
 from config import DB_CONFIG
 
 # --- OpenTelemetry Imports ---
@@ -11,11 +10,12 @@ from opentelemetry import trace, metrics
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as OTLPGrpcExporter
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter as OTLPGrpcExporter,
+)
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider
 from prometheus_client import start_http_server
-
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
@@ -28,10 +28,7 @@ trace.set_tracer_provider(TracerProvider(resource=resource))
 tracer = trace.get_tracer(__name__)
 
 # --- OTLP Exporter ---
-grpc_exporter = OTLPGrpcExporter(
-    endpoint="otel-collector:4317",
-    insecure=True
-)
+grpc_exporter = OTLPGrpcExporter(endpoint="otel-collector:4317", insecure=True)
 
 provider = trace.get_tracer_provider()
 provider.add_span_processor(BatchSpanProcessor(grpc_exporter))
@@ -54,7 +51,7 @@ meter = metrics.get_meter(__name__)
 
 request_counter = meter.create_counter(
     name="student_registration_requests_total",
-    description="Counts incoming student registration requests"
+    description="Counts incoming student registration requests",
 )
 
 start_http_server(9100)
@@ -73,6 +70,7 @@ def start_request_span():
     request.span.set_attribute("http.method", request.method)
     request.span.set_attribute("http.url", request.url)
 
+
 @app.after_request
 def end_request_span(response):
     if hasattr(request, "span") and request.span is not None:
@@ -87,6 +85,7 @@ def end_request_span(response):
         request.span = None
     return response
 
+
 @app.teardown_request
 def teardown_request_span(error=None):
     if hasattr(request, "span") and request.span is not None:
@@ -97,6 +96,7 @@ def teardown_request_span(error=None):
             request.span.set_status(Status(StatusCode.ERROR, str(error)))
         request.span.end()
         request.span = None
+
 
 # --- Database Connection ---
 def create_db_connection():
@@ -112,7 +112,10 @@ def create_db_connection():
                 span.set_attribute("net.peer.name", DB_CONFIG["host"])
                 log.info(
                     "Connected to DB",
-                    extra={"db.host": DB_CONFIG["host"], "db.name": DB_CONFIG["database"]}
+                    extra={
+                        "db.host": DB_CONFIG["host"],
+                        "db.name": DB_CONFIG["database"],
+                    },
                 )
         except Exception as e:
             span.record_exception(e)
@@ -129,6 +132,7 @@ def home():
         span.set_status(Status(StatusCode.OK))
         return "Student Registration API is running 🚀"
 
+
 @app.route("/health", methods=["GET"])
 def health():
     """
@@ -143,11 +147,15 @@ def health():
                 return jsonify({"status": "healthy"}), 200
             else:
                 span.set_status(Status(StatusCode.ERROR))
-                return jsonify({"status": "unhealthy", "reason": "DB not connected"}), 500
+                return (
+                    jsonify({"status": "unhealthy", "reason": "DB not connected"}),
+                    500,
+                )
         except Exception as e:
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
             return jsonify({"status": "unhealthy", "reason": str(e)}), 500
+
 
 @app.route("/register", methods=["POST"])
 def register_student():
@@ -173,11 +181,16 @@ def register_student():
                 raise Exception("DB connection failed")
 
             with tracer.start_as_current_span("db_insert_student") as db_span:
-                db_span.set_attribute("db.statement", "INSERT INTO students (first_name, last_name, email) VALUES (?, ?, ?)")
+                db_span.set_attribute(
+                    "db.statement",
+                    "INSERT INTO students (first_name, last_name, email) "
+                    "VALUES (?, ?, ?)",
+                )
                 cursor = connection.cursor()
                 cursor.execute(
-                    "INSERT INTO students (first_name, last_name, email) VALUES (%s, %s, %s)",
-                    (first_name, last_name, email)
+                    "INSERT INTO students (first_name, last_name, email) "
+                    "VALUES (%s, %s, %s)",
+                    (first_name, last_name, email),
                 )
                 connection.commit()
                 cursor.close()

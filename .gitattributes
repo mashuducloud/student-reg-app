@@ -1,0 +1,10 @@
+# Normalize line endings across platforms
+* text=auto
+
+# Enforce LF where tools expect it
+*.py     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+Dockerfile* text eol=lf
+*.sh     text eol=lf
+*.toml   text eol=lf

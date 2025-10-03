@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+APP_DIR="${app_dir}"
+
+# Install Docker, docker-compose plugin, Nginx
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl gnupg lsb-release nginx
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+ARCH="$(dpkg --print-architecture)"
+CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+echo   "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu   ${CODENAME} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+systemctl enable --now docker
+usermod -aG docker ubuntu || true
+
+# Prepare app directories
+mkdir -p "${APP_DIR}/shared" "${APP_DIR}/releases"
+echo "blue" > "${APP_DIR}/current_color"
+
+# Nginx reverse proxy to local frontend (default blue: 18080)
+cat >/etc/nginx/conf.d/student.conf <<'NGINX'
+server {
+  listen 80 default_server;
+  server_name _;
+  location / {
+    proxy_pass http://127.0.0.1:18080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+NGINX
+
+# Disable default site if present, then reload Nginx
+if [ -f /etc/nginx/sites-enabled/default ]; then rm -f /etc/nginx/sites-enabled/default; fi
+nginx -t && systemctl enable --now nginx && systemctl reload nginx
+
+echo "User-data completed."
