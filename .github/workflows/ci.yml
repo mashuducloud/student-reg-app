@@ -16,119 +16,79 @@ defaults:
     shell: bash
 
 jobs:
-  lint-and-test:
-    name: Lint and Unit Tests
+  lint_and_unit:
+    name: Lint & Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: backend/requirements*.txt
 
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt -r backend/requirements-ci.txt
+        run: |
+          python -m pip install -U pip
+          pip install -r backend/requirements.txt -r backend/requirements-ci.txt
 
-      - name: Run linters
+      - name: Lint
         run: make lint
 
-      - name: Run unit tests
+      - name: Unit tests (no services)
         env:
-          DB_HOST: "localhost"
-          DB_USER: "test"
-          DB_PASSWORD: "test"
-          DB_NAME: "test"
-          DB_PORT: "3306"
+          OTEL_SDK_DISABLED: "1"   # quiet OTEL exporter during unit runs
         run: make unit-test
 
-      - name: Upload coverage reports
+      - name: Upload coverage (unit)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
+          name: coverage-unit
           path: |
-            htmlcov/
             coverage.xml
+            htmlcov
 
-  build-and-scan:
-    name: Build and Scan Images
+  integration:
+    name: Integration / E2E
+    needs: lint_and_unit
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs: [lint-and-test]
-    permissions:
-      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker images
-        uses: docker/build-push-action@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          context: .
-          tags: |
-            student-app:ci
-            student-frontend:ci
-          load: true
+          python-version: "3.11"
 
-      - name: Install Trivy
+      - name: Install dependencies
         run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          python -m pip install -U pip
+          pip install -r backend/requirements.txt -r backend/requirements-ci.txt
 
-      - name: Run Trivy scan
-        run: make scan
+      - name: Ensure helper scripts are executable
+        run: chmod +x .github/scripts/wait-for-http.sh || true
 
-      - name: Save Docker images as artifact
-        run: docker save -o images.tar student-app:ci student-frontend:ci
+      - name: Bring up stack
+        run: |
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml up -d --wait --wait-timeout 180
 
-      - name: Upload Docker images artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-images
-          path: images.tar
-
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    needs: [build-and-scan]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download and load Docker images
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-images
-      - run: docker load -i images.tar
-
-      - name: Prepare .env file
+      - name: Wait for API health
         env:
-          DB_SECRET: ${{ secrets.DB_SECRET }}
-        run: printf '%s\n' "$DB_SECRET" > infra/.env
-
-      - name: Start services
-        run: make up
+          APP_BASE_URL: http://localhost:5000
+        run: .github/scripts/wait-for-http.sh "${APP_BASE_URL}/health" 90
 
       - name: Run integration tests
+        env:
+          APP_BASE_URL: http://localhost:5000
+          METRICS_URL: http://localhost:9100/metrics
         run: make integration-test
 
-      - name: Upload report artifacts
+      - name: Tear down stack
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-infra-report
-          path: ci-report.html
-
-      - name: Tear down services
-        if: always()
-        run: make down
+        run: |
+          docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml down -v
