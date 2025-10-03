@@ -24,7 +24,6 @@ services:
       timeout: 5s
       retries: 8
       start_period: 60s
-
   mysql-db:
     image: mysql:8.0
     container_name: mysql-db
@@ -44,7 +43,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-
   frontend:
     build:
       context: ..
@@ -63,7 +61,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-
   otel-collector:
     image: otel/opentelemetry-collector:0.135.0
     container_name: otel-collector
@@ -76,7 +73,6 @@ services:
     restart: always
     networks:
       - observability-network
-
   tempo:
     image: grafana/tempo:2.8.0
     container_name: infra-tempo
@@ -88,7 +84,6 @@ services:
     restart: always
     networks:
       - observability-network
-
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: infra-prometheus
@@ -101,7 +96,6 @@ services:
     restart: always
     networks:
       - observability-network
-
   grafana:
     image: grafana/grafana:12.2.0
     container_name: infra-grafana
@@ -113,7 +107,6 @@ services:
     restart: always
     networks:
       - observability-network
-
   tests:
     build:
       context: ..
@@ -136,7 +129,6 @@ services:
     networks:
       - observability-network
     restart: "no"
-
 networks:
   observability-network:
     driver: bridge
