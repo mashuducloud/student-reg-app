@@ -17,7 +17,7 @@ defaults:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # 1) LINT & UNIT TESTS
+  # 1) LINT & UNIT TESTS WITH COVERAGE
   # ────────────────────────────────────────────────────────────────────────────
   lint-and-test:
     name: Lint and Unit Tests
@@ -27,10 +27,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.11 with pip cache
-        uses: actions/setup-python@v5.1.0
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -50,8 +50,17 @@ jobs:
           bandit -r backend/ || true
           yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
 
-      - name: Run unit tests
-        run: pytest -q
+      - name: Run unit tests with coverage
+        run: pytest --cov=backend --cov-report=xml --cov-report=html
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            htmlcov/
+            coverage.xml
+          if-no-files-found: error
 
   # ────────────────────────────────────────────────────────────────────────────
   # 2) BUILD, SCAN & SAVE ARTIFACTS
@@ -63,15 +72,17 @@ jobs:
     needs: [lint-and-test]
     permissions:
       contents: read
+      security-events: write # Required for uploading SARIF reports to the Security tab
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.0.0
+        uses: docker/setup-buildx-action@v3
 
       - name: Build backend and frontend with cache
-        uses: docker/build-push-action@v5.4.0
+        id: build
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: |
@@ -84,19 +95,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy Scan (backend and frontend)
-        run: |
-          # Use trivy-action for scanning both images
-          # Backend Scan
-          docker run --rm aquasec/trivy:latest image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed student-app:ci
-          # Frontend Scan
-          docker run --rm aquasec/trivy:latest image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed student-frontend:ci
+      - name: Trivy Scan backend and upload to Security tab
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'student-app:ci'
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: 1
+
+      - name: Trivy Scan frontend and upload to Security tab
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'student-frontend:ci'
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: 1
 
       - name: Save Docker images as artifact
         run: docker save -o images.tar student-app:ci student-frontend:ci
 
       - name: Upload Docker images artifact
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4
         with:
           name: docker-images
           path: images.tar
@@ -114,10 +135,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v4
 
       - name: Download Docker images artifact
-        uses: actions/download-artifact@v4.1.8
+        uses: actions/download-artifact@v4
         with:
           name: docker-images
 
@@ -133,7 +154,6 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
         run: |
-          # (Your .env preparation script remains the same)
           set -euo pipefail
           mkdir -p infra
           if [ -n "${DB_SECRET:-}" ]; then
@@ -170,12 +190,15 @@ jobs:
           python -m pip install -q pytest requests || true
           pytest -q tests/integration/test_health_e2e.py
 
-      - name: Upload report artifacts
+      - name: Generate report artifacts
         if: always()
         run: |
           python .github/scripts/generate-report.py
           docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml config > compose.config.yaml
-        uses: actions/upload-artifact@v4.4.3
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: ci-infra-report
           path: |
@@ -194,13 +217,12 @@ jobs:
     name: Auto PR dev to default
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [integration-test] # Now only depends on the final test job
+    needs: [integration-test]
     if: github.ref == 'refs/heads/dev'
     permissions:
       contents: write
       pull-requests: write
     steps:
-      # (This job's steps remain the same)
       - name: Compare dev to default branch
         id: compare
         uses: actions/github-script@v7
