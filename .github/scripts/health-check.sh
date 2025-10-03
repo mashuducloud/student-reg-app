@@ -1,44 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Smoke health for student-reg-app stack: run checks from inside the Prometheus container.
 
-COMPOSE_FILE="infra/docker-compose.yml"
-PROM_SVC="prometheus"
-APP_METRICS_URL="http://student-app:9100/metrics"
-OTEL_METRICS_URL="http://otel-collector:9464/metrics"
-PROM_READY_URL="http://localhost:9090/-/ready"
+compose="docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml"
+echo "Running in-network health checks from inside 'prometheus' container..."
 
-retry() {
-  local max="$1"; shift
-  local delay="$1"; shift
-  local name="$1"; shift
-  local i
-  for i in $(seq 1 "$max"); do
-    if "$@"; then
-      echo "[OK] ${name}"
-      return 0
-    fi
-    echo "[wait] ${name} (attempt $i/${max})"
-    sleep "$delay"
-  done
-  echo "[FAIL] ${name} after ${max} attempts"
-  return 1
-}
+# Wait for student-app metrics
+ok=0
+for i in $(seq 1 30); do
+  if $compose exec -T prometheus sh -lc 'wget -qO- http://student-app:9100/metrics | head -n1 >/dev/null'; then
+    ok=1; break
+  fi
+  sleep 2
+done
+[ "$ok" -eq 1 ] || { echo "student-app metrics not ready"; exit 1; }
 
-in_prom() {
-  docker compose -f "${COMPOSE_FILE}" exec -T "${PROM_SVC}" sh -lc "$*"
-}
+# Wait for otel-collector metrics
+ok=0
+for i in $(seq 1 30); do
+  if $compose exec -T prometheus sh -lc 'wget -qO- http://otel-collector:9464/metrics | head -n1 >/dev/null'; then
+    ok=1; break
+  fi
+  sleep 2
+done
+[ "$ok" -eq 1 ] || { echo "otel-collector metrics not ready"; exit 1; }
 
-echo "== docker compose ps =="
-docker compose -f "${COMPOSE_FILE}" ps || true
-
-retry 30 2 "student-app metrics"   in_prom "wget -qO- ${APP_METRICS_URL} >/dev/null"
-
-retry 30 2 "otel-collector metrics"   in_prom "wget -qO- ${OTEL_METRICS_URL} >/dev/null"
-
-retry 20 2 "prometheus readiness"   in_prom "wget -qO- ${PROM_READY_URL} >/dev/null"
-
-echo "== Active targets (host API port 9091) =="
-curl -fsS "http://localhost:9091/api/v1/targets?state=active" | jq -r '.data.activeTargets[].labels.job' || true
-
-echo "Health checks completed successfully."
+# Prometheus readiness
+$compose exec -T prometheus sh -lc 'wget -qO- http://localhost:9090/-/ready >/dev/null'
+echo "In-network health checks OK."

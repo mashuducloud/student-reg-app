@@ -1,58 +1,38 @@
 #!/usr/bin/env python3
-import pathlib, datetime
-
-root = pathlib.Path.cwd()
-compose_cfg = root / "compose.config.yaml"
-cov_xml = root / "coverage" / "coverage.xml"
-cov_html_dir = root / "coverage" / "htmlcov"
-out = root / "ci-report.html"
-
-ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
-
-rows = []
-def add_row(name, path):
-    exists = path.exists()
-    rows.append( (name, str(path.relative_to(root)), "YES" if exists else "NO") )
-
-add_row("Compose (rendered) config", compose_cfg)
-add_row("Coverage XML", cov_xml)
-add_row("Coverage HTML index", cov_html_dir / "index.html")
-
-def row_html(name, path, ok):
-    cls = "ok" if ok == "YES" else "no"
-    return f"<tr><td>{name}</td><td><a href=\"{path}\">{path}</a></td><td><span class=\"badge {cls}\">{ok}</span></td></tr>"
-
+from datetime import datetime
 html = f"""<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8"/>
-<title>CI Report - {ts}</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta charset="utf-8">
+<title>CI Infra Report</title>
 <style>
-body {{ font-family: Arial, Helvetica, sans-serif; padding: 24px; }}
-h1 {{ margin: 0 0 12px; font-size: 20px; }}
-table {{ border-collapse: collapse; width: 100%; max-width: 900px; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; }}
-th {{ background: #f8f8f8; text-align: left; }}
-.badge {{ display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; color:#fff; }}
-.ok {{ background:#16a34a; }}
-.no {{ background:#dc2626; }}
-small {{ color:#666; }}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem}
+pre,code{background:#f6f8fa;padding:.25rem .5rem;border-radius:6px}
+.section{margin:1.2rem 0}
+h1{font-size:1.5rem} h2{font-size:1.1rem}
+ul{line-height:1.5}
 </style>
-</head>
-<body>
-  <h1>CI Report <small>({ts})</small></h1>
-  <p>This report summarizes artifacts produced by the Infra Smoke & Tests job.</p>
-  <table>
-    <thead><tr><th>Artifact</th><th>Path</th><th>Status</th></tr></thead>
-    <tbody>
-      {''.join(row_html(name, path, ok) for name, path, ok in rows)}
-    </tbody>
-  </table>
-  <p>If Coverage HTML is present, open <a href="coverage/htmlcov/index.html">coverage/htmlcov/index.html</a>.</p>
-</body>
-</html>
-"""
+<h1>CI Infra Report</h1>
+<p>Generated: {datetime.utcnow().isoformat()}Z</p>
 
-out.write_text(html, encoding="utf-8")
-print(str(out))
+<div class="section">
+  <h2>What ran</h2>
+  <ul>
+    <li>Compose config sanity</li>
+    <li>In-network health checks (Prometheus ⇄ App ⇄ OTEL)</li>
+    <li>Prometheus active targets verification</li>
+    <li>Integration tests (health + metrics)</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h2>Quick links (local compose ports)</h2>
+  <ul>
+    <li>Prometheus: <code>http://localhost:9091</code></li>
+    <li>Grafana: <code>http://localhost:3300</code></li>
+    <li>Tempo: <code>http://localhost:3201</code></li>
+    <li>App health: <code>http://localhost:5000/health</code></li>
+  </ul>
+</div>
+</html>"""
+open("ci-report.html","w",encoding="utf-8").write(html)
+print("Wrote ci-report.html")

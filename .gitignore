@@ -7,3 +7,4 @@ infra/.env
 .env
 *.env
 infra/.env
+.env.example
