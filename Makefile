@@ -35,7 +35,7 @@ logs:
 # === Testing ===
 unit-test:
 	@echo "--- Running Unit Tests (Flask mocked, no services) ---"
-	pytest -q tests/test_app.py --maxfail=1 --disable-warnings \
+	pytest -q backend/test_app.py --maxfail=1 --disable-warnings \
 		--cov=backend --cov-report=xml --cov-report=html
 
 integration-test:
