@@ -132,4 +132,3 @@ services:
 networks:
   observability-network:
     driver: bridge
-
