@@ -285,7 +285,7 @@ jobs:
           echo "Creating public repo ${OBS_REPO} ..."
           aws ecr-public create-repository \
             --repository-name "${OBS_REPO}" \
-            --catalog-data 'repositoryDescription=Unified observability images (Pre-Prod)' >/dev/null
+            --catalog-data 'description=Unified observability images (Pre-Prod)' >/dev/null
 
       - name: Login to ECR Public
         shell: bash
@@ -433,7 +433,7 @@ jobs:
           echo "Creating public repo ${OBS_REPO} ..."
           aws ecr-public create-repository \
             --repository-name "${OBS_REPO}" \
-            --catalog-data 'repositoryDescription=Unified observability images (Prod)' >/dev/null
+            --catalog-data 'description=Unified observability images (Prod)' >/dev/null
 
       - name: Login to ECR Public
         shell: bash
