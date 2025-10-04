@@ -277,12 +277,25 @@ jobs:
             --repository-name "${OBS_REPO_NAME}" \
             --catalog-data 'description=Unified observability images (Pre-Prod)' >/dev/null
 
+      
+      - name: Ensure ECR Public registry alias and derive REG
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALIAS_DESIRED="${ECR_PUBLIC_ALIAS}"
+          ALIAS_CURRENT="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
+          if [[ -z "${ALIAS_CURRENT}" || "${ALIAS_CURRENT}" == "None" ]]; then
+            echo "Setting public registry alias to ${ALIAS_DESIRED} ..."
+            aws ecr-public put-registry-catalog-data --region us-east-1 --registry-catalog-data "registryAlias=${ALIAS_DESIRED}"
+            ALIAS_CURRENT="${ALIAS_DESIRED}"
+          fi
+          echo "Using public alias: ${ALIAS_CURRENT}"
+          echo "REG=public.ecr.aws/${ALIAS_CURRENT}" >> "$GITHUB_ENV"
+
       - name: Login to ECR Public
         shell: bash
         run: |
-          REG="public.ecr.aws/${ECR_PUBLIC_ALIAS}"
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
-          echo "REG=${REG}" >> "$GITHUB_ENV"
 
       - name: Pull upstream images
         run: |
@@ -343,6 +356,20 @@ jobs:
               --image-tag-mutability MUTABLE \
               --encryption-configuration encryptionType=AES256 \
               >/dev/null
+
+      - name: Ensure repo exists when purge is false
+        if: ${{ env.ECR_PURGE != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
+            echo "Creating public repo ${OBS_REPO_NAME} (purge=false path) ..."
+            aws ecr-public create-repository \
+              --repository-name "${OBS_REPO_NAME}" \
+              --catalog-data 'description=Unified observability images' >/dev/null
+          else
+            echo "Repo ${OBS_REPO_NAME} already exists."
+          fi
           done
 
       - name: Download image artifact
@@ -412,12 +439,25 @@ jobs:
             --repository-name "${OBS_REPO_NAME}" \
             --catalog-data 'description=Unified observability images (Prod)' >/dev/null
 
+      
+      - name: Ensure ECR Public registry alias and derive REG
+        shell: bash
+        run: |
+          set -euo pipefail
+          ALIAS_DESIRED="${ECR_PUBLIC_ALIAS}"
+          ALIAS_CURRENT="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
+          if [[ -z "${ALIAS_CURRENT}" || "${ALIAS_CURRENT}" == "None" ]]; then
+            echo "Setting public registry alias to ${ALIAS_DESIRED} ..."
+            aws ecr-public put-registry-catalog-data --region us-east-1 --registry-catalog-data "registryAlias=${ALIAS_DESIRED}"
+            ALIAS_CURRENT="${ALIAS_DESIRED}"
+          fi
+          echo "Using public alias: ${ALIAS_CURRENT}"
+          echo "REG=public.ecr.aws/${ALIAS_CURRENT}" >> "$GITHUB_ENV"
+
       - name: Login to ECR Public
         shell: bash
         run: |
-          REG="public.ecr.aws/${ECR_PUBLIC_ALIAS}"
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
-          echo "REG=${REG}" >> "$GITHUB_ENV"
 
       - name: Pull upstream images
         run: |
