@@ -1,0 +1,101 @@
+name: CI (Infra smoke & tests)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["dev"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-infra
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  infra-smoke-and-tests:
+    name: Infra Smoke & Backend Tests (+ HTML Report)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+
+      # Use INDIVIDUAL secrets. This job fails fast if they're missing.
+      - name: Prepare .env for docker-compose (from secrets)
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DB_PASSWORD:-}" ] || [ -z "${MYSQL_ROOT_PASSWORD:-}" ]; then
+            echo "::error::Missing required secrets: DB_PASSWORD and/or MYSQL_ROOT_PASSWORD."
+            echo "Add them in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          # Mask in logs
+          echo "::add-mask::${DB_PASSWORD}"
+          echo "::add-mask::${MYSQL_ROOT_PASSWORD}"
+
+          mkdir -p infra
+          umask 077
+          cat > infra/.env <<EOF
+          DB_HOST=mysql-db
+          DB_PORT=3306
+          DB_NAME=student_registration_db
+          DB_USER=student
+          DB_PASSWORD=${DB_PASSWORD}
+          MYSQL_DATABASE=student_registration_db
+          MYSQL_USER=student
+          MYSQL_PASSWORD=${DB_PASSWORD}
+          MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+          MYSQL_ROOT_HOST=%
+          EOF
+
+      - name: Compose config (sanity) → artifact
+        run: docker compose -f infra/docker-compose.yml config > compose.config.yaml
+
+      - name: Start observability stack + app
+        run: |
+          set -euo pipefail
+          docker compose -f infra/docker-compose.yml up -d             otel-collector tempo prometheus grafana app
+          docker compose -f infra/docker-compose.yml ps
+
+      - name: Make helper scripts executable
+        run: |
+          chmod +x .github/scripts/health-check.sh || true
+          chmod +x .github/scripts/verify-targets.py || true
+
+      - name: Smoke health (Prometheus / OTEL / app)
+        run: ./.github/scripts/health-check.sh
+
+      - name: Verify Prometheus active targets
+        run: python ./.github/scripts/verify-targets.py
+
+      - name: Run backend tests + coverage (persist artifacts)
+        run: |
+          set -euo pipefail
+          mkdir -p coverage
+          docker compose -f infra/docker-compose.yml run --rm             -v "$PWD/coverage:/app/coverage"             tests             pytest --cov=. --cov-report=term-missing                    --cov-report=xml:coverage/coverage.xml                    --cov-report=html:coverage/htmlcov -v
+
+      - name: Generate HTML CI report
+        run: python ./.github/scripts/generate-report.py
+
+      - name: Upload HTML & coverage artifacts
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: ci-infra-report
+          path: |
+            compose.config.yaml
+            ci-report.html
+            coverage/coverage.xml
+            coverage/htmlcov/
+          if-no-files-found: error
+
+      - name: Tear down compose (always)
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v
