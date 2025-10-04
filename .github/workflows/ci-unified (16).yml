@@ -249,6 +249,25 @@ jobs:
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
 
+      
+      - name: Cleanup legacy Pre-Prod public repos (keep only desired)
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESIRED="public-student-reg-app-pre-prod-observability"
+          LEGACY=(
+            "mashkenneth/public-student-reg-app/Pre-Prod-observability"
+            "mashkenneth/public-student-reg-app/pre-prod-observability"
+            "public-student-reg-app/pre-prod-observability"
+          )
+          for repo in "${LEGACY[@]}"; do
+            if aws ecr-public describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting legacy public repo ${repo} ..."
+              aws ecr-public delete-repository --repository-name "${repo}" --force >/dev/null || true
+            fi
+          done
+          # If purge=true and desired already exists, it will be removed by the next step anyway.
+
       - name: (Dangerous) Delete & recreate ECR Public repo (Pre-Prod infra)
         shell: bash
         run: |
