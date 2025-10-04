@@ -247,7 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
     env:
-      OBS_REPO: mashkenneth/public-student-reg-app/pre-prod-observability
+      OBS_REPO_NAME: public-student-reg-app/pre-prod-observability
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -268,13 +268,13 @@ jobs:
             echo "ECR_PURGE is not true; skipping destructive purge."
             exit 0
           fi
-          if aws ecr-public describe-repositories --repository-names "${OBS_REPO}" >/dev/null 2>&1; then
-            echo "Deleting public repo ${OBS_REPO} ..."
-            aws ecr-public delete-repository --repository-name "${OBS_REPO}" --force >/dev/null
+          if aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
+            echo "Deleting public repo ${OBS_REPO_NAME} ..."
+            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}" --force >/dev/null
           fi
-          echo "Creating public repo ${OBS_REPO} ..."
+          echo "Creating public repo ${OBS_REPO_NAME} ..."
           aws ecr-public create-repository \
-            --repository-name "${OBS_REPO}" \
+            --repository-name "${OBS_REPO_NAME}" \
             --catalog-data 'description=Unified observability images (Pre-Prod)' >/dev/null
 
       - name: Login to ECR Public
@@ -293,14 +293,14 @@ jobs:
 
       - name: Tag & Push to ECR Public (Pre-Prod)
         run: |
-          docker tag prom/prometheus:${PROMETHEUS_VERSION}            "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
-          docker tag grafana/grafana:${GRAFANA_VERSION}              "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
-          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
-          docker tag grafana/tempo:${TEMPO_VERSION}                  "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
-          docker push "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
-          docker push "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
-          docker push "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
-          docker push "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
+          docker tag prom/prometheus:${PROMETHEUS_VERSION}            "${REG}/${OBS_REPO_NAME}:prometheus-${PROMETHEUS_VERSION}"
+          docker tag grafana/grafana:${GRAFANA_VERSION}              "${REG}/${OBS_REPO_NAME}:grafana-${GRAFANA_VERSION}"
+          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO_NAME}:otelcol-${OTELCOL_VERSION}"
+          docker tag grafana/tempo:${TEMPO_VERSION}                  "${REG}/${OBS_REPO_NAME}:tempo-${TEMPO_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:prometheus-${PROMETHEUS_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:grafana-${GRAFANA_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:otelcol-${OTELCOL_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:tempo-${TEMPO_VERSION}"
 
   publish-prod-app:
     name: Publish App (Prod) — purge ON
@@ -382,7 +382,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     env:
-      OBS_REPO: mashkenneth/public-student-reg-app/prod-observability
+      OBS_REPO_NAME: public-student-reg-app/prod-observability
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -403,13 +403,13 @@ jobs:
             echo "ECR_PURGE is not true; skipping destructive purge."
             exit 0
           fi
-          if aws ecr-public describe-repositories --repository-names "${OBS_REPO}" >/dev/null 2>&1; then
-            echo "Deleting public repo ${OBS_REPO} ..."
-            aws ecr-public delete-repository --repository-name "${OBS_REPO}" --force >/dev/null
+          if aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
+            echo "Deleting public repo ${OBS_REPO_NAME} ..."
+            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}" --force >/dev/null
           fi
-          echo "Creating public repo ${OBS_REPO} ..."
+          echo "Creating public repo ${OBS_REPO_NAME} ..."
           aws ecr-public create-repository \
-            --repository-name "${OBS_REPO}" \
+            --repository-name "${OBS_REPO_NAME}" \
             --catalog-data 'description=Unified observability images (Prod)' >/dev/null
 
       - name: Login to ECR Public
@@ -428,11 +428,11 @@ jobs:
 
       - name: Tag & Push to ECR Public (Prod)
         run: |
-          docker tag prom/prometheus:${PROMETHEUS_VERSION}            "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
-          docker tag grafana/grafana:${GRAFANA_VERSION}              "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
-          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
-          docker tag grafana/tempo:${TEMPO_VERSION}                  "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
-          docker push "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
-          docker push "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
-          docker push "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
-          docker push "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
+          docker tag prom/prometheus:${PROMETHEUS_VERSION}            "${REG}/${OBS_REPO_NAME}:prometheus-${PROMETHEUS_VERSION}"
+          docker tag grafana/grafana:${GRAFANA_VERSION}              "${REG}/${OBS_REPO_NAME}:grafana-${GRAFANA_VERSION}"
+          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO_NAME}:otelcol-${OTELCOL_VERSION}"
+          docker tag grafana/tempo:${TEMPO_VERSION}                  "${REG}/${OBS_REPO_NAME}:tempo-${TEMPO_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:prometheus-${PROMETHEUS_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:grafana-${GRAFANA_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:otelcol-${OTELCOL_VERSION}"
+          docker push "${REG}/${OBS_REPO_NAME}:tempo-${TEMPO_VERSION}"
