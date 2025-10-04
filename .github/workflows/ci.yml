@@ -16,79 +16,263 @@ defaults:
     shell: bash
 
 jobs:
-  lint_and_unit:
-    name: Lint & Unit Tests
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1) Static Quality Gates (lint + yaml + basic security)
+  # ────────────────────────────────────────────────────────────────────────────
+  quality-checks:
+    name: Quality Checks (lint & yaml)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
-      - name: Set up Python
+      - name: Set up Python 3.11 (with pip cache)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-ci.txt
 
-      - name: Install dependencies
+      - name: Install linters & tools
         run: |
-          python -m pip install -U pip
-          pip install -r backend/requirements.txt -r backend/requirements-ci.txt
+          python -m pip install --upgrade pip
+          # Keep CI tooling separate from app deps
+          pip install -r backend/requirements-ci.txt
 
-      - name: Lint
-        run: make lint
+      - name: Python Lint (flake8)
+        run: flake8 backend/
 
-      - name: Unit tests (no services)
-        env:
-          OTEL_SDK_DISABLED: "1"   # quiet OTEL exporter during unit runs
-        run: make unit-test
+      - name: Security Lint (bandit — non-blocking)
+        run: bandit -r backend/ || true
 
-      - name: Upload coverage (unit)
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: YAML Lint (observability configs)
+        run: yamllint infra/otel-collector-config.yaml infra/prometheus.yml infra/tempo.yaml
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2) Build + Trivy (local) — runs in parallel after quality-checks
+  # ────────────────────────────────────────────────────────────────────────────
+  build-and-scan:
+    name: Build & Trivy Scan (local images)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [quality-checks]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend (with cache)
+        uses: docker/build-push-action@v5
         with:
-          name: coverage-unit
+          context: .
+          file: infra/Dockerfile.backend
+          tags: student-app:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend (with cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile.frontend
+          tags: student-frontend:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy Scan — BACKEND
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: student-app:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: 1
+
+      - name: Trivy Scan — FRONTEND
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: student-frontend:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: 1
+
+      - name: Print local image sizes
+        run: docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 3) Compose Smoke + Tests + HTML report — runs in parallel after quality-checks
+  # ────────────────────────────────────────────────────────────────────────────
+  infra-smoke-and-tests:
+    name: Infra Smoke & Backend Tests (+ HTML Report)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: [quality-checks]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.1.1
+
+      # Prefer DB_SECRET (.env as one secret). Else require DB_PASSWORD + MYSQL_ROOT_PASSWORD.
+      - name: Prepare .env for docker-compose (safe, no heredoc)
+        env:
+          DB_SECRET: ${{ secrets.DB_SECRET }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -e
+          mkdir -p infra
+          if [ -n "${DB_SECRET:-}" ]; then
+            printf "%s\n" "${DB_SECRET}" > infra/.env
+          else
+            if [ -z "${DB_PASSWORD:-}" ] || [ -z "${MYSQL_ROOT_PASSWORD:-}" ]; then
+              echo "Error: Provide DB_SECRET (preferred) OR both DB_PASSWORD and MYSQL_ROOT_PASSWORD." >&2
+              exit 1
+            fi
+            {
+              printf 'DB_HOST=mysql-db\n'
+              printf 'DB_PORT=3306\n'
+              printf 'DB_NAME=student_registration_db\n'
+              printf 'DB_USER=student\n'
+              printf 'DB_PASSWORD=%s\n' "${DB_PASSWORD}"
+              printf 'MYSQL_DATABASE=student_registration_db\n'
+              printf 'MYSQL_USER=student\n'
+              printf 'MYSQL_PASSWORD=%s\n' "${DB_PASSWORD}"
+              printf 'MYSQL_ROOT_PASSWORD=%s\n' "${MYSQL_ROOT_PASSWORD}"
+              printf 'MYSQL_ROOT_HOST=%%\n'
+            } > infra/.env
+          fi
+          echo "Wrote infra/.env"
+
+      - name: Compose config (sanity) → artifact
+        run: docker compose -f infra/docker-compose.yml config > compose.config.yaml
+
+      - name: Start observability stack + app
+        run: |
+          docker compose -f infra/docker-compose.yml up -d
+          docker compose -f infra/docker-compose.yml ps
+
+      - name: Prepare helper scripts (normalize CRLF and +x)
+        run: |
+          set -e
+          shopt -s nullglob
+          for f in .github/scripts/*.sh; do
+            sed -i 's/\r$//' "$f" || true
+            chmod +x "$f" || true
+          done
+
+      - name: Smoke health (Prometheus/OTEL/app)
+        run: |
+          if [ -x ./.github/scripts/health-check.sh ]; then
+            bash ./.github/scripts/health-check.sh
+          else
+            echo "health-check.sh not found; skipping."
+          fi
+
+      - name: Verify Prometheus active targets
+        run: |
+          if [ -f ./.github/scripts/verify-targets.py ]; then
+            python ./.github/scripts/verify-targets.py
+          else
+            echo "verify-targets.py not found; skipping."
+          fi
+
+      - name: Run backend tests + coverage (persist artifacts)
+        run: |
+          mkdir -p coverage
+          docker compose -f infra/docker-compose.yml run --rm \
+            -v "$PWD/coverage:/app/coverage" \
+            tests \
+            pytest --cov=. --cov-report=term-missing \
+                   --cov-report=xml:coverage/coverage.xml \
+                   --cov-report=html:coverage/htmlcov -v
+
+      - name: Generate HTML CI report
+        run: |
+          if [ -f ./.github/scripts/generate-report.py ]; then
+            python ./.github/scripts/generate-report.py
+          else
+            echo "<html><body><h1>CI Report</h1><p>No generator script found.</p></body></html>" > ci-report.html
+          fi
+
+      - name: Upload HTML & coverage artifacts
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: ci-infra-report
           path: |
-            coverage.xml
-            htmlcov
+            compose.config.yaml
+            ci-report.html
+            coverage/coverage.xml
+            coverage/htmlcov/
+          if-no-files-found: error
 
-  integration:
-    name: Integration / E2E
-    needs: lint_and_unit
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install -U pip
-          pip install -r backend/requirements.txt -r backend/requirements-ci.txt
-
-      - name: Ensure helper scripts are executable
-        run: chmod +x .github/scripts/wait-for-http.sh || true
-
-      - name: Bring up stack
-        run: |
-          docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml up -d --wait --wait-timeout 180
-
-      - name: Wait for API health
-        env:
-          APP_BASE_URL: http://localhost:5000
-        run: .github/scripts/wait-for-http.sh "${APP_BASE_URL}/health" 90
-
-      - name: Run integration tests
-        env:
-          APP_BASE_URL: http://localhost:5000
-          METRICS_URL: http://localhost:9100/metrics
-        run: make integration-test
-
-      - name: Tear down stack
+      - name: Tear down compose (always)
         if: always()
-        run: |
-          docker compose -f infra/docker-compose.yml -f infra/docker-compose.override.yml down -v
+        run: docker compose -f infra/docker-compose.yml down -v
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 4) Auto PR dev → default (uses built-in GITHUB_TOKEN)
+  # ────────────────────────────────────────────────────────────────────────────
+  open-pr-when-ahead:
+    name: Auto PR dev → default (GITHUB_TOKEN)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [quality-checks, build-and-scan, infra-smoke-and-tests]
+    if: success() && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Open or reuse PR (compute compare inline)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+
+            // Resolve default branch (base)
+            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
+            const base = repoData.default_branch;
+            const head = 'dev';
+            if (base === head) { core.info(`base==head (${base}); skipping.`); return; }
+
+            // Compare dev → base
+            const { data: cmp } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', {
+              owner, repo, base, head
+            });
+            const aheadBy = Number(cmp?.ahead_by ?? 0);
+            core.info(`dev is ahead of ${base} by ${aheadBy} commits`);
+            if (!(aheadBy > 0)) { core.info('Not ahead; nothing to PR.'); return; }
+
+            // Reuse existing open PR if present
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo, state: 'open', base, head: `${owner}:${head}`
+            });
+            if (prs.length > 0) {
+              core.info(`PR already open: #${prs[0].number} (${prs[0].html_url})`);
+              return;
+            }
+
+            // Create PR
+            const title = `Auto PR: ${head} → ${base} (CI)`;
+            const body = `Opened by CI.\n\nBase: ${base}\nCommit: ${context.sha}\nActor: @${context.actor}`;
+            try {
+              const { data: pr } = await github.rest.pulls.create({ owner, repo, head, base, title, body });
+              core.info(`Created PR #${pr.number} (${pr.html_url})`);
+            } catch (err) {
+              if (err.status === 422 && /No commits between/i.test(err.message)) {
+                core.info('No commits between branches; skipping PR.');
+              } else {
+                throw err;
+              }
+            }
