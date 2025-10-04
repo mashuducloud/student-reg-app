@@ -1,58 +1,100 @@
 #!/usr/bin/env python3
-import pathlib, datetime
+from pathlib import Path
+from html import escape
+import os, json
+from datetime import datetime, timezone
 
-root = pathlib.Path.cwd()
-compose_cfg = root / "compose.config.yaml"
-cov_xml = root / "coverage" / "coverage.xml"
-cov_html_dir = root / "coverage" / "htmlcov"
-out = root / "ci-report.html"
+def read_text(path: str, limit: int = 200_000):
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        data = p.read_text(encoding="utf-8", errors="replace")
+        if len(data) > limit:
+            data = data[:limit] + "\n...\n[truncated]\n"
+        return data
+    except Exception as e:
+        return f"[error reading {path}: {e}]"
 
-ts = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+def try_json(path: str):
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
 
-rows = []
-def add_row(name, path):
-    exists = path.exists()
-    rows.append( (name, str(path.relative_to(root)), "YES" if exists else "NO") )
+def section(title, body_html):
+    return f"""<section class="card">
+  <h2>{escape(title)}</h2>
+  {body_html}
+</section>"""
 
-add_row("Compose (rendered) config", compose_cfg)
-add_row("Coverage XML", cov_xml)
-add_row("Coverage HTML index", cov_html_dir / "index.html")
+def pre_block(text, lang=""):
+    cl = f" class='code {lang}'" if lang else " class='code'"
+    return f"<pre{cl}><code>{escape(text)}</code></pre>"
 
-def row_html(name, path, ok):
-    cls = "ok" if ok == "YES" else "no"
-    return f"<tr><td>{name}</td><td><a href=\"{path}\">{path}</a></td><td><span class=\"badge {cls}\">{ok}</span></td></tr>"
+now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+repo = os.getenv("GITHUB_REPOSITORY","")
+run_url = f"{os.getenv('GITHUB_SERVER_URL','https://github.com')}/{repo}/actions/runs/{os.getenv('GITHUB_RUN_ID','')}"
+commit = os.getenv("GITHUB_SHA","")
 
-html = f"""<!doctype html>
+compose_cfg = read_text("compose.config.yaml")
+targets = try_json("prom_targets.json")
+coverage_xml = read_text("coverage/coverage.xml")
+
+sections = ""
+meta = f"""<table>
+<tr><th>Repository</th><td>{escape(repo)}</td></tr>
+<tr><th>Run</th><td><a href="{escape(run_url)}">{escape(run_url)}</a></td></tr>
+<tr><th>Commit</th><td><code>{escape(commit)}</code></td></tr>
+<tr><th>Generated</th><td>{escape(now)}</td></tr>
+</table>"""
+sections += section("Run metadata", meta)
+
+if compose_cfg:
+    sections += section("Compose (merged config)", pre_block(compose_cfg, "yaml"))
+
+if targets:
+    rows = []
+    for t in targets.get("data", {}).get("activeTargets", []):
+        job = t.get("labels",{}).get("job","")
+        url = t.get("scrapeUrl","")
+        last = t.get("lastScrape","")
+        rows.append(f"<tr><td>{escape(job)}</td><td>{escape(url)}</td><td>{escape(last)}</td></tr>")
+    table = "<table><tr><th>job</th><th>scrapeUrl</th><th>lastScrape</th></tr>" + "".join(rows) + "</table>"
+    sections += section("Prometheus active targets", table)
+
+if coverage_xml:
+    sections += section("Coverage (XML snippet)", pre_block(coverage_xml[:4000], "xml"))
+
+html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<title>CI Report - {ts}</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CI Report</title>
 <style>
-body {{ font-family: Arial, Helvetica, sans-serif; padding: 24px; }}
-h1 {{ margin: 0 0 12px; font-size: 20px; }}
-table {{ border-collapse: collapse; width: 100%; max-width: 900px; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; }}
-th {{ background: #f8f8f8; text-align: left; }}
-.badge {{ display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; color:#fff; }}
-.ok {{ background:#16a34a; }}
-.no {{ background:#dc2626; }}
-small {{ color:#666; }}
+:root {{ --muted:#f6f7f9; --border:#e5e7eb; --fg:#111827; --fg2:#374151; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: var(--fg); background: #fff; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }}
+h1 {{ font-size: 1.6rem; margin: 0 0 1rem; }}
+h2 {{ font-size: 1.2rem; margin: 0 0 .75rem; color: var(--fg2); }}
+table {{ border-collapse: collapse; width: 100%; margin: .5rem 0 0; }}
+th, td {{ border: 1px solid var(--border); padding: .5rem .6rem; text-align: left; }}
+.card {{ background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin: 1rem 0; }}
+pre.code {{ background: var(--muted); padding: 1rem; border-radius: 10px; overflow: auto; }}
+code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }}
+a {{ color: #2563eb; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
-  <h1>CI Report <small>({ts})</small></h1>
-  <p>This report summarizes artifacts produced by the Infra Smoke & Tests job.</p>
-  <table>
-    <thead><tr><th>Artifact</th><th>Path</th><th>Status</th></tr></thead>
-    <tbody>
-      {''.join(row_html(name, path, ok) for name, path, ok in rows)}
-    </tbody>
-  </table>
-  <p>If Coverage HTML is present, open <a href="coverage/htmlcov/index.html">coverage/htmlcov/index.html</a>.</p>
+<h1>CI Report</h1>
+{sections}
 </body>
-</html>
-"""
+</html>"""
 
-out.write_text(html, encoding="utf-8")
-print(str(out))
+Path("ci-report.html").write_text(html_doc, encoding="utf-8")
+print("Wrote ci-report.html")

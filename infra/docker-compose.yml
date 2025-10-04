@@ -1,3 +1,4 @@
+---
 services:
   app:
     build:
@@ -18,21 +19,17 @@ services:
       - observability-network
     restart: always
     healthcheck:
-      # Simpler & more reliable than the python one-liner
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 8
       start_period: 60s
-
-
   mysql-db:
     image: mysql:8.0
     container_name: mysql-db
     restart: always
     env_file:
       - ./.env
-    # No ${DB_*} here; the image consumes MYSQL_* directly from env_file
     ports:
       - "3307:3306"
     networks:
@@ -40,20 +37,19 @@ services:
     volumes:
       - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     healthcheck:
-      # Expand password INSIDE container; $$ escapes for Compose
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      test: |
+        mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
-
   frontend:
     build:
       context: ..
       dockerfile: infra/Dockerfile.frontend
     container_name: student-frontend
     ports:
-      - "8080:80"   # map localhost:8080 → container’s port 80
+      - "8080:80"
     networks:
       - observability-network
     depends_on:
@@ -65,7 +61,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-
   otel-collector:
     image: otel/opentelemetry-collector:0.135.0
     container_name: otel-collector
@@ -73,12 +68,11 @@ services:
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
     ports:
-      - "43171:4317"   # OTLP gRPC
-      - "43181:4318"   # OTLP HTTP
+      - "43171:4317"
+      - "43181:4318"
     restart: always
     networks:
       - observability-network
-
   tempo:
     image: grafana/tempo:2.8.0
     container_name: infra-tempo
@@ -86,11 +80,10 @@ services:
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
     ports:
-      - "3201:3200"   # Tempo UI
+      - "3201:3200"
     restart: always
     networks:
       - observability-network
-
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: infra-prometheus
@@ -99,11 +92,10 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
-      - "9091:9090"   # Prometheus UI
+      - "9091:9090"
     restart: always
     networks:
       - observability-network
-
   grafana:
     image: grafana/grafana:12.2.0
     container_name: infra-grafana
@@ -111,11 +103,10 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
     ports:
-      - "3300:3000"   # Grafana UI
+      - "3300:3000"
     restart: always
     networks:
       - observability-network
-
   tests:
     build:
       context: ..
@@ -138,11 +129,6 @@ services:
     networks:
       - observability-network
     restart: "no"
-
 networks:
   observability-network:
     driver: bridge
-
-
-
-
