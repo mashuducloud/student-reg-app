@@ -1,0 +1,483 @@
+name: CI (Unified Build, Test & Deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ECR_PURGE:
+        description: 'Delete & recreate target ECR repos before publish (DANGEROUS)'
+        required: false
+        default: 'true'   # default ON
+  push:
+    branches: ["dev", "main", "master"]
+  pull_request:
+    branches: ["dev", "main", "master"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
+  ECR_PUBLIC_ALIAS: mashkenneth
+  BACKEND_DOCKERFILE: infra/Dockerfile.backend
+  IMAGE_NAME_LOCAL: student-backend:ci
+  # Default ON (true) unless explicitly overridden by workflow input or secret
+  ECR_PURGE: ${{ inputs.ECR_PURGE || secrets.ECR_PURGE || 'true' }}
+  PROMETHEUS_VERSION: "v2.54.1"
+  GRAFANA_VERSION: "11.2.0"
+  OTELCOL_VERSION: "0.108.0"
+  TEMPO_VERSION: "2.5.0"
+
+jobs:
+  get-secrets:
+    name: Get Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      aws_access_key_id:     ${{ steps.out.outputs.aws_access_key_id }}
+      aws_secret_access_key: ${{ steps.out.outputs.aws_secret_access_key }}
+      aws_session_token:     ${{ steps.out.outputs.aws_session_token }}
+      aws_region:            ${{ steps.out.outputs.aws_region }}
+      role_arn:              ${{ steps.out.outputs.role_arn }}
+    steps:
+      - name: Read AWS_DEPLOY_SECRET JSON (if present)
+        id: out
+        shell: bash
+        run: |
+          set -euo pipefail
+          json='${{ secrets.AWS_DEPLOY_SECRET }}'
+          if [[ -n "${json}" ]]; then
+            echo "aws_access_key_id=$(jq -r '.AWS_ACCESS_KEY_ID // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "aws_secret_access_key=$(jq -r '.AWS_SECRET_ACCESS_KEY // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "aws_session_token=$(jq -r '.AWS_SESSION_TOKEN // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "aws_region=$(jq -r '.AWS_REGION // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "role_arn=$(jq -r '.ROLE_ARN // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-test:
+    name: Lint • Build • Unit & Integration Tests • Artifacts
+    runs-on: ubuntu-latest
+    needs: [get-secrets]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+            backend/requirements.txt
+            backend/requirements-ci.txt
+
+      - name: Install CI toolchain
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f backend/requirements-ci.txt ]]; then
+            pip install -r backend/requirements-ci.txt
+          elif [[ -f requirements-ci.txt ]]; then
+            pip install -r requirements-ci.txt
+          else
+            pip install flake8 bandit yamllint
+          fi
+
+      - name: Install app dependencies
+        run: |
+          if [[ -f backend/requirements.txt ]]; then
+            pip install -r backend/requirements.txt
+          elif [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Lint (flake8)
+        run: |
+          if [[ -d backend ]]; then flake8 backend/; else flake8 .; fi
+
+      - name: Security Lint (bandit — non-blocking)
+        run: |
+          if [[ -d backend ]]; then bandit -r backend/ || true; else bandit -r . || true; fi
+
+      - name: YAML Lint
+        run: |
+          set -e
+          shopt -s nullglob
+          yamllint -d relaxed .github/workflows || true
+          yamllint -d relaxed *.yml *.yaml || true
+          if [[ -d infra ]]; then yamllint -d relaxed infra || true; fi
+
+      - name: Build backend image
+        run: |
+          docker build -t "${IMAGE_NAME_LOCAL}" -f "${BACKEND_DOCKERFILE}" .
+
+      - name: Run unit tests (pytest)
+        run: |
+          set -e
+          if [[ -f backend/test_app.py ]]; then
+            pytest -q backend/test_app.py
+          elif [[ -f tests/unit/test_app.py ]]; then
+            pytest -q tests/unit/test_app.py
+          else
+            pytest -q
+          fi
+
+      - name: Start container for integration tests
+        run: |
+          docker run -d --rm --name app -p 5000:5000 -p 9100:9100 "${IMAGE_NAME_LOCAL}"
+          echo "APP_BASE_URL=http://localhost:5000" >> "$GITHUB_ENV"
+          echo "METRICS_URL=http://localhost:9100/metrics" >> "$GITHUB_ENV"
+
+      - name: Run integration tests
+        env:
+          APP_BASE_URL: ${{ env.APP_BASE_URL }}
+          METRICS_URL:  ${{ env.METRICS_URL }}
+        run: |
+          pytest -q tests/integration/test_health_e2e.py
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f app || true
+
+      - name: Save Docker image as artifact (tar.gz)
+        run: |
+          docker save "${IMAGE_NAME_LOCAL}" | gzip > app-image.tar.gz
+        if: ${{ !cancelled() }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: build-and-tests
+          path: |
+            app-image.tar.gz
+            **/coverage.xml
+            coverage/
+            .pytest_cache/
+          if-no-files-found: ignore
+
+  publish-preprod-app:
+    name: Publish App (Pre-Prod) — purge ON
+    runs-on: ubuntu-latest
+    needs: [build-test, get-secrets]
+    if: github.ref == 'refs/heads/dev'
+    env:
+      APP_REPO: mashkenneth/public-student-reg-app/pre-prod
+      SIG_REPO: mashkenneth/public-student-reg-app/pre-prod-student-reg-app-sig
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      
+      - name: Cleanup legacy Private repos (Pre-Prod)
+        run: |
+          set -euo pipefail
+          LEGACY=(
+            "mashkenneth/public-student-reg-app/pre-prod-student-frontend"
+            "mashkenneth/public-student-reg-app/pre-prod-student-frontend-sig"
+            "mashkenneth/public-student-reg-app/pre-prod-student-reg-app"  # old separate backend repo
+          )
+          for repo in "${LEGACY[@]}"; do
+            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting legacy private repo ${repo} ..."
+              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null || true
+            fi
+          done
+      - name: (Dangerous) Delete & recreate ECR repos (Pre-Prod app)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ECR_PURGE}" != "true" ]]; then
+            echo "ECR_PURGE is not true; skipping destructive purge."
+            exit 0
+          fi
+          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting repository ${repo} (force) ..."
+              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null
+            fi
+            echo "Recreating repository ${repo} (MUTABLE, AES256) ..."
+            aws ecr create-repository \
+              --repository-name "${repo}" \
+              --image-tag-mutability MUTABLE \
+              --encryption-configuration encryptionType=AES256 \
+              >/dev/null
+          done
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-and-tests
+
+      - name: Load image
+        run: docker load -i app-image.tar.gz
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push to Pre-Prod app repo
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/${APP_REPO}"
+          docker tag "${IMAGE_NAME_LOCAL}" "${IMAGE}:latest"
+          docker tag "${IMAGE_NAME_LOCAL}" "${IMAGE}:${SHA::12}"
+          docker push "${IMAGE}:latest"
+          docker push "${IMAGE}:${SHA::12}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Sign Pre-Prod app images (cosign keyless)
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/${APP_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}" cosign sign --yes "${IMAGE}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}" cosign sign --yes "${IMAGE}:${SHA::12}"
+
+  publish-preprod-infra:
+    name: Publish Observability (Pre-Prod Public ECR) — purge ON
+    runs-on: ubuntu-latest
+    needs: [get-secrets]
+    if: github.ref == 'refs/heads/dev'
+    env:
+      OBS_REPO: mashkenneth/public-student-reg-app/Pre-Prod-observability
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: (Dangerous) Delete & recreate ECR Public repo (Pre-Prod infra)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ECR_PURGE}" != "true" ]]; then
+            echo "ECR_PURGE is not true; skipping destructive purge."
+            exit 0
+          fi
+          if aws ecr-public describe-repositories --repository-names "${OBS_REPO}" >/dev/null 2>&1; then
+            echo "Deleting public repo ${OBS_REPO} ..."
+            aws ecr-public delete-repository --repository-name "${OBS_REPO}" --force >/dev/null
+          fi
+          echo "Creating public repo ${OBS_REPO} ..."
+          aws ecr-public create-repository \
+            --repository-name "${OBS_REPO}" \
+            --catalog-data 'repositoryDescription=Unified observability images (Pre-Prod)' >/dev/null
+
+      - name: Login to ECR Public
+        shell: bash
+        run: |
+          REG="public.ecr.aws/${ECR_PUBLIC_ALIAS}"
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
+          echo "REG=${REG}" >> "$GITHUB_ENV"
+
+      - name: Pull upstream images
+        run: |
+          docker pull prom/prometheus:${PROMETHEUS_VERSION}
+          docker pull grafana/grafana:${GRAFANA_VERSION}
+          docker pull otel/opentelemetry-collector:${OTELCOL_VERSION}
+          docker pull grafana/tempo:${TEMPO_VERSION}
+
+      - name: Tag & Push to ECR Public (Pre-Prod)
+        run: |
+          docker tag prom/prometheus:${PROMETHEUS_VERSION}           "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
+          docker tag grafana/grafana:${GRAFANA_VERSION}             "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
+          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
+          docker tag grafana/tempo:${TEMPO_VERSION}                 "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
+          docker push "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
+          docker push "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
+          docker push "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
+          docker push "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
+
+  publish-prod-app:
+    name: Publish App (Prod) — purge ON
+    runs-on: ubuntu-latest
+    needs: [build-test, get-secrets]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    env:
+      APP_REPO: mashkenneth/public-student-reg-app/prod
+      SIG_REPO: mashkenneth/public-student-reg-app/prod-student-reg-app-sig
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      
+      - name: Cleanup legacy Private repos (Prod)
+        run: |
+          set -euo pipefail
+          LEGACY=(
+            "mashkenneth/public-student-reg-app/prod-student-frontend"
+            "mashkenneth/public-student-reg-app/prod-student-frontend-sig"
+            "mashkenneth/public-student-reg-app/prod-student-reg-app"  # old separate backend repo
+          )
+          for repo in "${LEGACY[@]}"; do
+            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting legacy private repo ${repo} ..."
+              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null || true
+            fi
+          done
+      - name: (Dangerous) Delete & recreate ECR repos (Prod app)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ECR_PURGE}" != "true" ]]; then
+            echo "ECR_PURGE is not true; skipping destructive purge."
+            exit 0
+          fi
+          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting repository ${repo} (force) ..."
+              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null
+            fi
+            echo "Recreating repository ${repo} (MUTABLE, AES256) ..."
+            aws ecr create-repository \
+              --repository-name "${repo}" \
+              --image-tag-mutability MUTABLE \
+              --encryption-configuration encryptionType=AES256 \
+              >/dev/null
+          done
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-and-tests
+
+      - name: Load image
+        run: docker load -i app-image.tar.gz
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push to Prod app repo
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/${APP_REPO}"
+          docker tag "${IMAGE_NAME_LOCAL}" "${IMAGE}:latest"
+          docker tag "${IMAGE_NAME_LOCAL}" "${IMAGE}:${SHA::12}"
+          docker push "${IMAGE}:latest"
+          docker push "${IMAGE}:${SHA::12}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Sign Prod app images (cosign keyless)
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/${APP_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}" cosign sign --yes "${IMAGE}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}" cosign sign --yes "${IMAGE}:${SHA::12}"
+
+  publish-prod-infra:
+    name: Publish Observability (Prod Public ECR) — purge ON
+    runs-on: ubuntu-latest
+    needs: [get-secrets]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    env:
+      OBS_REPO: mashkenneth/public-student-reg-app/Prod-observability
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
+          aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: (Dangerous) Delete & recreate ECR Public repo (Prod infra)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${ECR_PURGE}" != "true" ]]; then
+            echo "ECR_PURGE is not true; skipping destructive purge."
+            exit 0
+          fi
+          if aws ecr-public describe-repositories --repository-names "${OBS_REPO}" >/dev/null 2>&1; then
+            echo "Deleting public repo ${OBS_REPO} ..."
+            aws ecr-public delete-repository --repository-name "${OBS_REPO}" --force >/dev/null
+          fi
+          echo "Creating public repo ${OBS_REPO} ..."
+          aws ecr-public create-repository \
+            --repository-name "${OBS_REPO}" \
+            --catalog-data 'repositoryDescription=Unified observability images (Prod)' >/dev/null
+
+      - name: Login to ECR Public
+        shell: bash
+        run: |
+          REG="public.ecr.aws/${ECR_PUBLIC_ALIAS}"
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
+          echo "REG=${REG}" >> "$GITHUB_ENV"
+
+      - name: Pull upstream images
+        run: |
+          docker pull prom/prometheus:${PROMETHEUS_VERSION}
+          docker pull grafana/grafana:${GRAFANA_VERSION}
+          docker pull otel/opentelemetry-collector:${OTELCOL_VERSION}
+          docker pull grafana/tempo:${TEMPO_VERSION}
+
+      - name: Tag & Push to ECR Public (Prod)
+        run: |
+          docker tag prom/prometheus:${PROMETHEUS_VERSION}           "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
+          docker tag grafana/grafana:${GRAFANA_VERSION}             "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
+          docker tag otel/opentelemetry-collector:${OTELCOL_VERSION} "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
+          docker tag grafana/tempo:${TEMPO_VERSION}                 "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
+          docker push "${REG}/${OBS_REPO}:prometheus-${PROMETHEUS_VERSION}"
+          docker push "${REG}/${OBS_REPO}:grafana-${GRAFANA_VERSION}"
+          docker push "${REG}/${OBS_REPO}:otelcol-${OTELCOL_VERSION}"
+          docker push "${REG}/${OBS_REPO}:tempo-${TEMPO_VERSION}"
