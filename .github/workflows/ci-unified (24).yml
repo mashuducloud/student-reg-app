@@ -1,0 +1,222 @@
+name: CI (Unified Build, Test & Deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ECR_PURGE:
+        description: 'Delete & recreate target ECR repos before publish (DANGEROUS)'
+        required: false
+        default: 'true'
+  push:
+    branches: ["dev", "main", "master"]
+  pull_request:
+    branches: ["dev", "main", "master"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
+  ECR_PUBLIC_ALIAS: mashkenneth
+  BACKEND_DOCKERFILE: infra/Dockerfile.backend
+  FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
+  IMAGE_BACKEND_LOCAL: student-backend:ci
+  IMAGE_FRONTEND_LOCAL: student-frontend:ci
+  ECR_PURGE: ${{ inputs.ECR_PURGE || secrets.ECR_PURGE || 'true' }}
+  PROMETHEUS_VERSION: "v2.54.1"
+  GRAFANA_VERSION: "11.2.0"
+  OTELCOL_VERSION: "0.108.0"
+  TEMPO_VERSION: "2.5.0"
+
+jobs:
+  build-test:
+    name: Lint • Build • Scan • Test • Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ci.txt
+            backend/requirements.txt
+            backend/requirements-ci.txt
+
+      - name: Install CI toolchain
+        run: |
+          python -m pip install --upgrade pip
+          if [[ -f backend/requirements-ci.txt ]]; then
+            pip install -r backend/requirements-ci.txt
+          elif [[ -f requirements-ci.txt ]]; then
+            pip install -r requirements-ci.txt
+          else
+            pip install flake8 bandit yamllint pytest
+          fi
+
+      - name: Install app dependencies
+        run: |
+          if [[ -f backend/requirements.txt ]]; then
+            pip install -r backend/requirements.txt
+          elif [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Python Lint (flake8)
+        run: |
+          if [[ -d backend ]]; then flake8 backend/; else flake8 .; fi
+
+      - name: Security Lint (bandit — non-blocking)
+        run: |
+          if [[ -d backend ]]; then bandit -r backend/ || true; else bandit -r . || true; fi
+
+      - name: YAML Lint (observability configs)
+        run: |
+          set -e
+          shopt -s nullglob
+          yamllint -d relaxed .github/workflows || true
+          yamllint -d relaxed *.yml *.yaml || true
+          if [[ -d infra ]]; then yamllint -d relaxed infra || true; fi
+
+      - name: Build backend image
+        run: |
+          docker build -t "${IMAGE_BACKEND_LOCAL}" -f "${BACKEND_DOCKERFILE}" .
+
+      - name: Build frontend image
+        run: |
+          docker build -t "${IMAGE_FRONTEND_LOCAL}" -f "${FRONTEND_DOCKERFILE}" .
+
+      - name: Trivy Scan — BACKEND
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.IMAGE_BACKEND_LOCAL }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: 1
+
+      - name: Trivy Scan — FRONTEND
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.IMAGE_FRONTEND_LOCAL }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: 1
+
+      - name: Run unit tests (pytest)
+        env:
+          DB_HOST: 127.0.0.1
+          DB_USER: student
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: student_registration_db
+          DB_PORT: '3306'
+        run: |
+          set -e
+          if [[ -f backend/test_app.py ]]; then
+            pytest -q backend/test_app.py
+          elif [[ -f tests/unit/test_app.py ]]; then
+            pytest -q tests/unit/test_app.py
+          else
+            pytest -q
+          fi
+
+      - name: Create docker network for tests
+        run: docker network create testnet || true
+
+      - name: Start MySQL (ephemeral for CI)
+        env:
+          MYSQL_DATABASE: student_registration_db
+          MYSQL_USER: student
+          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          docker run -d --rm --name mysql             --network testnet             -e MYSQL_DATABASE="${MYSQL_DATABASE}"             -e MYSQL_USER="${MYSQL_USER}"             -e MYSQL_PASSWORD="${MYSQL_PASSWORD}"             -e MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD}"             -p 3306:3306             mysql:8.0             --default-authentication-plugin=mysql_native_password
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          set -e
+          for i in {1..60}; do
+            docker exec mysql mysqladmin ping -h 127.0.0.1 -uroot -p"${{ secrets.DB_PASSWORD }}" --silent && exit 0 || sleep 2
+          done
+          echo "MySQL did not become ready in time" >&2
+          docker logs mysql || true
+          exit 1
+
+      - name: Start app container for integration tests
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          docker run -d --rm --name app             --network testnet             -p 5000:5000 -p 9100:9100             -e DB_HOST=mysql             -e DB_USER=student             -e DB_PASSWORD="${DB_PASSWORD}"             -e DB_NAME=student_registration_db             -e DB_PORT=3306             "${IMAGE_BACKEND_LOCAL}"
+          echo "APP_BASE_URL=http://localhost:5000" >> "$GITHUB_ENV"
+          echo "METRICS_URL=http://localhost:9100/metrics" >> "$GITHUB_ENV"
+
+      - name: Wait for app to be healthy
+        run: |
+          set -e
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health || true)
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not become healthy in time (last code: $code)" >&2
+          echo "--- APP LOGS ---"
+          docker logs app || true
+          echo "--- MYSQL LOGS ---"
+          docker logs mysql || true
+          exit 1
+
+      - name: Run integration tests
+        env:
+          APP_BASE_URL: ${{ env.APP_BASE_URL }}
+          METRICS_URL:  ${{ env.METRICS_URL }}
+        run: |
+          pytest -q tests/integration/test_health_e2e.py
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker rm -f app || true
+          docker rm -f mysql || true
+          docker network rm testnet || true
+
+      - name: Save Docker images as artifacts
+        run: |
+          docker save "${IMAGE_BACKEND_LOCAL}" | gzip > backend-image.tar.gz
+          docker save "${IMAGE_FRONTEND_LOCAL}" | gzip > frontend-image.tar.gz
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-and-tests
+          path: |
+            backend-image.tar.gz
+            frontend-image.tar.gz
+            **/coverage.xml
+            coverage/
+            .pytest_cache/
+          if-no-files-found: ignore
+
+  publish-preprod-app:
+    name: Publish App (Pre-Prod) — purge ON
+    runs-on: ubuntu-latest
+    needs: [build-test]
+    if: github.ref == 'refs/heads/dev'
+    env:
+      APP_REPO: mashkenneth/public-student-reg-app/pre-prod
+      SIG_REPO: mashkenneth/public-student-reg-app/pre-prod-student-reg-app-sig
