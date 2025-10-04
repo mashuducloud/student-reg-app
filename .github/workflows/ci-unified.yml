@@ -42,7 +42,9 @@ jobs:
     outputs:
       aws_access_key_id:     ${{ steps.out.outputs.aws_access_key_id }}
       aws_secret_access_key: ${{ steps.out.outputs.aws_secret_access_key }}
+      aws_session_token:     ${{ steps.out.outputs.aws_session_token }}
       aws_region:            ${{ steps.out.outputs.aws_region }}
+      role_arn:              ${{ steps.out.outputs.role_arn }}
     steps:
       - name: Read AWS_DEPLOY_SECRET JSON (if present)
         id: out
@@ -53,7 +55,9 @@ jobs:
           if [[ -n "${json}" ]]; then
             echo "aws_access_key_id=$(jq -r '.AWS_ACCESS_KEY_ID // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
             echo "aws_secret_access_key=$(jq -r '.AWS_SECRET_ACCESS_KEY // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "aws_session_token=$(jq -r '.AWS_SESSION_TOKEN // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
             echo "aws_region=$(jq -r '.AWS_REGION // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
+            echo "role_arn=$(jq -r '.ROLE_ARN // empty' <<<\"${json}\")" >> "$GITHUB_OUTPUT"
           fi
 
   build-test:
@@ -171,12 +175,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
           aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
-          aws-region:            ${{ needs.get-secrets.outputs.aws_region || env.AWS_REGION }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: (Dangerous) Delete & recreate ECR repos (Pre-Prod app)
         shell: bash
@@ -239,12 +253,22 @@ jobs:
     env:
       OBS_REPO: mashkenneth/public-student-reg-app/Pre-Prod-observability
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
           aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
-          aws-region:            ${{ needs.get-secrets.outputs.aws_region || env.AWS_REGION }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: (Dangerous) Delete & recreate ECR Public repo (Pre-Prod infra)
         shell: bash
@@ -299,12 +323,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
           aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
-          aws-region:            ${{ needs.get-secrets.outputs.aws_region || env.AWS_REGION }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: (Dangerous) Delete & recreate ECR repos (Prod app)
         shell: bash
@@ -367,12 +401,22 @@ jobs:
     env:
       OBS_REPO: mashkenneth/public-student-reg-app/Prod-observability
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        if: needs.get-secrets.outputs.role_arn != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume:        ${{ needs.get-secrets.outputs.role_arn }}
+          aws-region:            ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+      
+      - name: Configure AWS credentials (static keys)
+        if: needs.get-secrets.outputs.role_arn == '' && needs.get-secrets.outputs.aws_access_key_id != ''
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ needs.get-secrets.outputs.aws_access_key_id }}
           aws-secret-access-key: ${{ needs.get-secrets.outputs.aws_secret_access_key }}
-          aws-region:            ${{ needs.get-secrets.outputs.aws_region || env.AWS_REGION }}
+          aws-session-token:     ${{ needs.get-secrets.outputs.aws_session_token }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: (Dangerous) Delete & recreate ECR Public repo (Prod infra)
         shell: bash
