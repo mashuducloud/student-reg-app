@@ -116,19 +116,71 @@ jobs:
           fi
 
       # Integration Tests
-      - name: Start container for integration tests
+      
+      # Create a dedicated network so app can reach mysql by name
+      - name: Create docker network for tests
+        run: docker network create testnet || true
+
+      # Start ephemeral MySQL for integration tests
+      - name: Start MySQL (ephemeral for CI)
+        env:
+          MYSQL_DATABASE: student_registration_db
+          MYSQL_USER: student
+          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
-          docker run -d --rm --name app             -p 5000:5000 -p 9100:9100             -e DB_HOST=127.0.0.1             -e DB_USER=student             -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}"             -e DB_NAME=student_registration_db             -e DB_PORT=3306             "${IMAGE_NAME_LOCAL}"
+          docker run -d --rm --name mysql \
+            --network testnet \
+            -e MYSQL_DATABASE="${MYSQL_DATABASE}" \
+            -e MYSQL_USER="${MYSQL_USER}" \
+            -e MYSQL_PASSWORD="${MYSQL_PASSWORD}" \
+            -e MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD}" \
+            -p 3306:3306 \
+            mysql:8.0 \
+            --default-authentication-plugin=mysql_native_password
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          set -e
+          for i in {1..60}; do
+            docker exec mysql mysqladmin ping -h 127.0.0.1 -uroot -p"${{ secrets.DB_PASSWORD }}" --silent && exit 0 || sleep 2
+          done
+          echo "MySQL did not become ready in time" >&2
+          docker logs mysql || true
+          exit 1
+
+      # Start app container (points to mysql)
+      - name: Start container for integration tests
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          docker run -d --rm --name app \
+            --network testnet \
+            -p 5000:5000 -p 9100:9100 \
+            -e DB_HOST=mysql \
+            -e DB_USER=student \
+            -e DB_PASSWORD="${DB_PASSWORD}" \
+            -e DB_NAME=student_registration_db \
+            -e DB_PORT=3306 \
+            "${IMAGE_NAME_LOCAL}"
           echo "APP_BASE_URL=http://localhost:5000" >> "$GITHUB_ENV"
           echo "METRICS_URL=http://localhost:9100/metrics" >> "$GITHUB_ENV"
 
       - name: Wait for app to be healthy
         run: |
           set -e
-          for i in {1..30}; do
-            curl -fsS http://localhost:5000/health && exit 0 || sleep 1
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health || true)
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            sleep 2
           done
-          echo "App did not become healthy in time" >&2
+          echo "App did not become healthy in time (last code: $code)" >&2
+          echo "--- APP LOGS ---"
+          docker logs app || true
+          echo "--- MYSQL LOGS ---"
+          docker logs mysql || true
           exit 1
 
       - name: Run integration tests
@@ -137,10 +189,15 @@ jobs:
           METRICS_URL:  ${{ env.METRICS_URL }}
         run: |
           pytest -q tests/integration/test_health_e2e.py
+          pytest -q tests/integration/test_health_e2e.py
 
-      - name: Stop container
+      
+      - name: Stop containers
         if: always()
-        run: docker rm -f app || true
+        run: |
+          docker rm -f app || true
+          docker rm -f mysql || true
+          docker network rm testnet || true
 
       # Publish Build Artifacts
       - name: Save Docker image as artifact (tar.gz)
