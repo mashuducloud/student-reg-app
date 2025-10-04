@@ -247,7 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/dev'
     env:
-      OBS_REPO_NAME: public-student-reg-app/pre-prod-observability
+      OBS_REPO_NAME: public-student-reg-app-pre-prod-observability
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -382,7 +382,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     env:
-      OBS_REPO_NAME: public-student-reg-app/prod-observability
+      OBS_REPO_NAME: public-student-reg-app-prod-observability
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
