@@ -375,4 +375,3 @@ jobs:
           docker pull "${UPSTREAM_TEMPO}"
           docker tag "${UPSTREAM_TEMPO}" "${TARGET_TEMPO}"
           docker push "${TARGET_TEMPO}"
-          

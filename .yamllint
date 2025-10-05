@@ -3,7 +3,7 @@ extends: default
 
 rules:
   line-length:
-    max: 160
+    max: 120
     level: warning
     allow-non-breakable-words: true
 
@@ -11,5 +11,4 @@ rules:
     max: 1
   document-start:
     level: warning
-  truthy:
-    level: warning
+  truthy: disable
