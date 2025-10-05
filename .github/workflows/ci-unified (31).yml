@@ -251,7 +251,7 @@ jobs:
     needs: [get-secrets]
     if: github.ref == 'refs/heads/dev'
     env:
-      OBS_REPO_NAME: mashkenneth/public-student-reg-app/pre-prod-observability
+      OBS_REPO_NAME: public-student-reg-app-pre-prod-observability
     steps:
       - name: Configure AWS credentials (OIDC)
         if: needs.get-secrets.outputs.role_arn != ''
@@ -280,12 +280,12 @@ jobs:
           fi
           if aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
             echo "Deleting public repo ${OBS_REPO_NAME} ..."
-            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}"_NAME}" --force >/dev/null
+            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}" --force >/dev/null
           fi
           echo "Creating public repo ${OBS_REPO_NAME} ..."
           aws ecr-public create-repository \
             --repository-name "${OBS_REPO_NAME}" \
-            --catalog-data description="\1" >/dev/null
+            --catalog-data description="Unified observability images (Pre-Prod)" >/dev/null
 
       - name: Login to ECR Public
         shell: bash
@@ -399,7 +399,7 @@ jobs:
     needs: [get-secrets]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     env:
-      OBS_REPO_NAME: mashkenneth/public-student-reg-app/prod-observability
+      OBS_REPO_NAME: public-student-reg-app-prod-observability
     steps:
       - name: Configure AWS credentials (OIDC)
         if: needs.get-secrets.outputs.role_arn != ''
@@ -428,12 +428,12 @@ jobs:
           fi
           if aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
             echo "Deleting public repo ${OBS_REPO_NAME} ..."
-            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}"_NAME}" --force >/dev/null
+            aws ecr-public delete-repository --repository-name "${OBS_REPO_NAME}" --force >/dev/null
           fi
           echo "Creating public repo ${OBS_REPO_NAME} ..."
           aws ecr-public create-repository \
             --repository-name "${OBS_REPO_NAME}" \
-            --catalog-data description="\1" >/dev/null
+            --catalog-data description="Unified observability images (Pre-Prod)" >/dev/null
 
       - name: Login to ECR Public
         shell: bash
