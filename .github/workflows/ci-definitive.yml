@@ -1,3 +1,4 @@
+---
 name: CI/CD (Definitive)
 
 on:
@@ -207,10 +208,10 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
-          aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-session-token: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
       - name: (Dangerous) Delete & recreate ECR Private repos
@@ -262,14 +263,24 @@ jobs:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
           docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+
           docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+
           docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+
           docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
-          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -285,10 +296,10 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
-          aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-session-token: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
       - name: (Dangerous) Delete & recreate ECR Private repos
@@ -336,12 +347,22 @@ jobs:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
           docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+
           docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+
           docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+
           docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
-          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} \
+            "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
       # Rest of the steps are identical to pre-prod and omitted for brevity
