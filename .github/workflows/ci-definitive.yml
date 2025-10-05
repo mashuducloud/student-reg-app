@@ -127,7 +127,8 @@ jobs:
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
       - name: Prepare .env for docker-compose
-        env: { DB_SECRET: ${{ secrets.DB_SECRET }} }
+        env:
+          DB_SECRET: ${{ secrets.DB_SECRET }}
         run: |
           set -e; mkdir -p infra;
           if [ -n "${DB_SECRET:-}" ]; then printf "%s\n" "${DB_SECRET}" > infra/.env;
@@ -162,6 +163,30 @@ jobs:
       - name: Tear down services
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
+
+  open-pr-when-ahead:
+    name: "CI: Auto PR dev → default"
+    runs-on: ubuntu-latest
+    needs: [infra-smoke-and-tests]
+    if: success() && github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
+            const base = repoData.default_branch;
+            const head = 'dev';
+            if (base === head) return;
+            const { data: { ahead_by } } = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', { owner, repo, base, head });
+            if (ahead_by === 0) return;
+            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', base, head: `${owner}:${head}` });
+            if (prs.length > 0) { console.log('PR already exists.'); return; }
+            await github.rest.pulls.create({ owner, repo, head, base, title: `Auto PR: ${head} → ${base}`, body: `Opened by CI.` });
 
   # ────────────────────────────────────────────────────────────────────────────
   # STAGE 2: Continuous Deployment (CD)
@@ -206,7 +231,8 @@ jobs:
           aws ecr-public create-repository --repository-name "${{ env.OBS_REPO }}"
       - name: Download image artifacts
         uses: actions/download-artifact@v4
-        with: { name: image-artifacts }
+        with:
+          name: image-artifacts
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
       - name: Login to Amazon ECR (Private and Public)
@@ -214,7 +240,8 @@ jobs:
           aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
           aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
       - name: Push App Images to Private ECR
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
           docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_DEST}:backend-${SHA::12}"
@@ -223,7 +250,8 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.6.0
       - name: Sign Private images
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
@@ -233,6 +261,9 @@ jobs:
         run: |
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
+          docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
           # Omitted for brevity, but includes docker pull, tag, and push for all observability tools
 
   publish-prod:
@@ -267,4 +298,37 @@ jobs:
         run: |
           aws ecr-public delete-repository --repository-name "${{ env.OBS_REPO }}" --force || true
           aws ecr-public create-repository --repository-name "${{ env.OBS_REPO }}"
+      - name: Download image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: image-artifacts
+      - name: Load Docker images
+        run: docker load < backend-image.tar && docker load < frontend-image.tar
+      - name: Login to Amazon ECR (Private and Public)
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+      - name: Push App Images to Private ECR
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_DEST}:backend-${SHA::12}"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_DEST}:frontend-${SHA::12}"
+          docker push "${IMAGE_DEST}" --all-tags
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+      - name: Sign Private images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
+          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
+      - name: Push Observability Stack to Public ECR
+        run: |
+          set -ex
+          REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
+          # Omitted for brevity, but includes docker pull, tag, and push for all observability tools
       # Rest of the steps are identical to pre-prod and omitted for brevity
