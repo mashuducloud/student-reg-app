@@ -240,13 +240,15 @@ jobs:
           done
       - name: Download image artifacts
         uses: actions/download-artifact@v4
-        with: { name: image-artifacts }
+        with:
+          name: image-artifacts
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
       - name: Login to Amazon ECR (Private)
         uses: aws-actions/amazon-ecr-login@v2
       - name: Push App Images to Private ECR
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
           docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_DEST}:backend-${SHA::12}"
@@ -256,7 +258,8 @@ jobs:
       - name: Install cosign for image signing
         uses: sigstore/cosign-installer@v3.6.0
       - name: Sign Private images
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
@@ -264,7 +267,8 @@ jobs:
           cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
       - name: Login to Amazon ECR (Public)
         uses: aws-actions/amazon-ecr-login@v2
-        with: { registry-type: public }
+        with:
+          registry-type: public
       - name: Push Observability Stack to Public ECR
         run: |
           set -ex
@@ -310,13 +314,15 @@ jobs:
           done
       - name: Download image artifacts
         uses: actions/download-artifact@v4
-        with: { name: image-artifacts }
+        with:
+          name: image-artifacts
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
       - name: Login to Amazon ECR (Private)
         uses: aws-actions/amazon-ecr-login@v2
       - name: Push App Images to Private ECR
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
           docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_DEST}:backend-${SHA::12}"
@@ -326,7 +332,8 @@ jobs:
       - name: Install cosign for image signing
         uses: sigstore/cosign-installer@v3.6.0
       - name: Sign Private images
-        env: { SHA: ${{ github.sha }} }
+        env:
+          SHA: ${{ github.sha }}
         run: |
           export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
@@ -334,7 +341,8 @@ jobs:
           cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
       - name: Login to Amazon ECR (Public)
         uses: aws-actions/amazon-ecr-login@v2
-        with: { registry-type: public }
+        with:
+          registry-type: public
       - name: Push Observability Stack to Public ECR
         run: |
           set -ex
