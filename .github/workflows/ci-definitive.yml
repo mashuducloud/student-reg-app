@@ -376,10 +376,9 @@ jobs:
           cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
           cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
       - name: Push Observability Stack to Public ECR
-        run: |
+        run:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
-
           UPSTREAM_PROM="prom/prometheus:${{ env.PROMETHEUS_VERSION }}"
           TARGET_PROM="${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
           docker pull "${UPSTREAM_PROM}"
