@@ -224,10 +224,8 @@ jobs:
         if: env.ECR_PURGE == 'true'
         run: |
           if aws ecr-public describe-repositories --repository-names "${{ env.OBS_REPO }}" >/dev/null 2>&1; then
-            echo "Deleting public repo ${{ env.OBS_REPO }} ..."
             aws ecr-public delete-repository --repository-name "${{ env.OBS_REPO }}" --force
           fi
-          echo "Creating public repo ${{ env.OBS_REPO }} ..."
           aws ecr-public create-repository --repository-name "${{ env.OBS_REPO }}"
       - name: Download image artifacts
         uses: actions/download-artifact@v4
@@ -262,9 +260,14 @@ jobs:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
           docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
           docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          # Omitted for brevity, but includes docker pull, tag, and push for all observability tools
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -330,5 +333,13 @@ jobs:
         run: |
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
-          # Omitted for brevity, but includes docker pull, tag, and push for all observability tools
+          docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
+          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags tools
       # Rest of the steps are identical to pre-prod and omitted for brevity
