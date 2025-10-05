@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       ECR_PURGE:
-        description: 'Delete & recreate target ECR repos before publish (DANGEROUS)'
+        description: >
+          Delete & recreate target ECR repos before publish
+          (DANGEROUS)
         required: false
         default: 'true'
   push:
@@ -60,10 +62,8 @@ jobs:
         run: bandit -r backend/ || true
       - name: Dependency Security Scan (pip-audit)
         run: pip install -r backend/requirements.txt && pip-audit -r backend/requirements.txt
-      - name: DEBUG - List files in root directory
-        run: ls -la
       - name: Comprehensive YAML Lint
-        run: yamllint -d relaxed .
+        run: yamllint .
 
   build-and-scan:
     name: "CI: Build, Scan & Artifacts"
