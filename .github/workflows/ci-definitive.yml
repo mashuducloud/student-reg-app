@@ -236,18 +236,6 @@ jobs:
           name: image-artifacts
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
-
-- name: Login to ECR Public & ensure observability repo
-  env:
-    AWS_REGION: ${{ env.AWS_REGION }}
-    ECR_PUBLIC_ALIAS: ${{ env.ECR_PUBLIC_ALIAS }}
-    OBS_REPO: ${{ env.OBS_REPO }}
-  shell: bash
-  run: |
-    set -euo pipefail
-    REGION="${AWS_REGION:-us-east-1}"
-    aws ecr-public get-login-password --region "$REGION"         | docker login --username AWS --password-stdin public.ecr.aws
-    aws ecr-public describe-repositories --region "$REGION" --repository-names "$OBS_REPO" >/dev/null 2>&1         || aws ecr-public create-repository --region "$REGION" --repository-name "$OBS_REPO" >/dev/null
       - name: Login to Amazon ECR (Private and Public)
         run: |
           aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
@@ -262,41 +250,14 @@ jobs:
           docker push "${IMAGE_DEST}" --all-tags
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.6.0
-
-- name: Sign images with cosign (by digest)
-  env:
-    AWS_REGION: ${{ env.AWS_REGION }}
-    ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
-    APP_REPO: ${{ env.APP_REPO }}
-    SIG_REPO: ${{ env.SIG_REPO }}
-    SHA: ${{ env.SHA }}
-  shell: bash
-  run: |
-    set -euo pipefail
-    # Put signatures under a dedicated repo (same registry)
-    export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
-    SHORT="${SHA::12}"
-
-    get_digest() {
-      local TAG="$1"
-      aws ecr describe-images           --region "$AWS_REGION"           --repository-name "$APP_REPO"           --image-ids imageTag="$TAG"           --query 'imageDetails[0].imageDigest'           --output text
-    }
-
-    B_DIGEST="$(get_digest "backend-${SHORT}")"
-    F_DIGEST="$(get_digest "frontend-${SHORT}")"
-
-    if [[ -z "$B_DIGEST" || "$B_DIGEST" == "None" ]]; then
-      echo "ERROR: backend tag backend-${SHORT} not found in ${APP_REPO}"; exit 1
-    fi
-    if [[ -z "$F_DIGEST" || "$F_DIGEST" == "None" ]]; then
-      echo "ERROR: frontend tag frontend-${SHORT} not found in ${APP_REPO}"; exit 1
-    fi
-
-    echo "Signing backend digest: ${B_DIGEST}"
-    cosign sign --yes "${ECR_REGISTRY}/${APP_REPO}@${B_DIGEST}"
-
-    echo "Signing frontend digest: ${F_DIGEST}"
-    cosign sign --yes "${ECR_REGISTRY}/${APP_REPO}@${F_DIGEST}"
+      - name: Sign Private images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
+          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
       - name: Push Observability Stack to Public ECR
         run: |
           set -ex
