@@ -365,4 +365,3 @@ jobs:
           docker tag grafana/tempo:${{ env.TEMPO_VERSION }} \
             "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
           docker push "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-      # Rest of the steps are identical to pre-prod and omitted for brevity
