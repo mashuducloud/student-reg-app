@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       ECR_PURGE:
-        description: 'Delete & recreate ECR repos before publish (DANGEROUS)'
+        description: 'Delete & recreate target ECR repos before publish (DANGEROUS)'
         required: false
         default: 'true'
   push:
-    branches: [ "dev", "main", "master" ]
+    branches: ["dev", "main", "master"]
   pull_request:
-    branches: [ "dev", "main", "master" ]
+    branches: ["dev", "main", "master"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +25,7 @@ env:
   PYTHON_VERSION: "3.11"
   AWS_REGION: us-east-1
   ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
+  ECR_PUBLIC_ALIAS: mashkenneth
   BACKEND_DOCKERFILE: infra/Dockerfile.backend
   FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
   IMAGE_BACKEND_LOCAL: student-backend:ci
@@ -82,7 +83,7 @@ jobs:
         run: |
           if [[ -d backend ]]; then bandit -r backend/ || true; else bandit -r . || true; fi
 
-      - name: YAML Lint (observability & workflow)
+      - name: YAML Lint (observability configs)
         run: |
           set -e
           shopt -s nullglob
@@ -217,8 +218,10 @@ jobs:
     needs: [build-test]
     if: github.ref == 'refs/heads/dev'
     env:
-      APP_REPO: mashkenneth/public-student-reg-app/pre-prod
-      SIG_REPO: mashkenneth/public-student-reg-app/pre-prod-student-reg-app-sig
+      BE_REPO: mashkenneth/public-student-reg-app/pre-prod-student-reg-app
+      BE_SIG_REPO: mashkenneth/public-student-reg-app/pre-prod-student-reg-app-sig
+      FE_REPO: mashkenneth/public-student-reg-app/pre-prod-student-frontend
+      FE_SIG_REPO: mashkenneth/public-student-reg-app/pre-prod-student-frontend-sig
     steps:
       - uses: actions/checkout@v4
 
@@ -228,36 +231,19 @@ jobs:
           aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region:            us-east-1
 
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
 
-      - name: Cleanup legacy Private repos (Pre-Prod)
-        shell: bash
-        run: |
-          set -euo pipefail
-          LEGACY=(
-            "mashkenneth/public-student-reg-app/pre-prod-student-reg-app"
-            "mashkenneth/public-student-reg-app/pre-prod-student-frontend"
-            "mashkenneth/public-student-reg-app/pre-prod-student-frontend-sig"
-          )
-          for repo in "${LEGACY[@]}"; do
-            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
-              echo "Deleting legacy private repo ${repo} ..."
-              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null || true
-            fi
-          done
-
       - name: (Dangerous) Delete & recreate ECR repos (Pre-Prod app)
-        shell: bash
         run: |
           set -euo pipefail
           if [[ "${ECR_PURGE}" != "true" ]]; then
             echo "ECR_PURGE is not true; skipping destructive purge."
             exit 0
           fi
-          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+          for repo in "${BE_REPO}" "${BE_SIG_REPO}" "${FE_REPO}" "${FE_SIG_REPO}"; do
             if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
               echo "Deleting repository ${repo} (force) ..."
               aws ecr delete-repository --repository-name "${repo}" --force >/dev/null
@@ -279,21 +265,22 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Push to Private ECR (single repo: backend + frontend)
+      - name: Push to Private ECR (backend + frontend)
         env:
           SHA: ${{ github.sha }}
         run: |
-          IMAGE_APP="${ECR_REGISTRY}/${APP_REPO}"
           # backend
-          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_APP}:backend-latest"
-          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_APP}:backend-${SHA::12}"
-          docker push "${IMAGE_APP}:backend-latest"
-          docker push "${IMAGE_APP}:backend-${SHA::12}"
+          IMAGE_B="${ECR_REGISTRY}/${BE_REPO}"
+          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_B}:latest"
+          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_B}:${SHA::12}"
+          docker push "${IMAGE_B}:latest"
+          docker push "${IMAGE_B}:${SHA::12}"
           # frontend
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_APP}:frontend-latest"
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_APP}:frontend-${SHA::12}"
-          docker push "${IMAGE_APP}:frontend-latest"
-          docker push "${IMAGE_APP}:frontend-${SHA::12}"
+          IMAGE_F="${ECR_REGISTRY}/${FE_REPO}"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_F}:latest"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_F}:${SHA::12}"
+          docker push "${IMAGE_F}:latest"
+          docker push "${IMAGE_F}:${SHA::12}"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.6.0
@@ -302,30 +289,14 @@ jobs:
         env:
           SHA: ${{ github.sha }}
         run: |
-          IMAGE_APP="${ECR_REGISTRY}/${APP_REPO}"
-          SIG_APP="${ECR_REGISTRY}/${SIG_REPO}"
           # backend
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:backend-latest"
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:backend-${SHA::12}"
+          IMAGE_B="${ECR_REGISTRY}/${BE_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${BE_SIG_REPO}" cosign sign --yes "${IMAGE_B}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${BE_SIG_REPO}" cosign sign --yes "${IMAGE_B}:${SHA::12}"
           # frontend
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:frontend-latest"
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:frontend-${SHA::12}"
-
-      - name: Verify only two private repos exist (Pre-Prod)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ALLOWED=("mashkenneth/public-student-reg-app/pre-prod" "mashkenneth/public-student-reg-app/pre-prod-student-reg-app-sig")
-          mapfile -t ALL < <(aws ecr describe-repositories             --query "repositories[?starts_with(repositoryName, \`mashkenneth/public-student-reg-app/\`)].repositoryName"             --output text | tr '	' '
-' | sed '/^$/d' || true)
-          declare -A OK; for a in "${ALLOWED[@]}"; do OK["$a"]=1; done
-          UNEXPECTED=()
-          for r in "${ALL[@]:-}"; do [[ -z "${OK[$r]:-}" ]] && UNEXPECTED+=("$r"); done
-          if ((${#UNEXPECTED[@]:-0} > 0)); then
-            echo "::error::Unexpected repos present:"; printf ' - %s
-' "${UNEXPECTED[@]}"; exit 1
-          fi
-          echo "✅ Exactly the expected two repos exist (Pre-Prod)."
+          IMAGE_F="${ECR_REGISTRY}/${FE_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${FE_SIG_REPO}" cosign sign --yes "${IMAGE_F}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${FE_SIG_REPO}" cosign sign --yes "${IMAGE_F}:${SHA::12}"
 
   publish-preprod-infra:
     name: Publish Observability (Pre-Prod Public ECR) — purge ON
@@ -340,13 +311,28 @@ jobs:
           aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region:            us-east-1
 
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
 
+      - name: Cleanup legacy Pre-Prod public repos (keep only desired)
+        run: |
+          set -euo pipefail
+          DESIRED="public-student-reg-app-pre-prod-observability"
+          LEGACY=(
+            "mashkenneth/public-student-reg-app/Pre-Prod-observability"
+            "mashkenneth/public-student-reg-app/pre-prod-observability"
+            "public-student-reg-app/pre-prod-observability"
+          )
+          for repo in "${LEGACY[@]}"; do
+            if aws ecr-public describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
+              echo "Deleting legacy public repo ${repo} ..."
+              aws ecr-public delete-repository --repository-name "${repo}" --force >/dev/null || true
+            fi
+          done
+
       - name: (Dangerous) Delete & recreate ECR Public repo (Pre-Prod infra)
-        shell: bash
         run: |
           set -euo pipefail
           if [[ "${ECR_PURGE}" != "true" ]]; then
@@ -362,7 +348,6 @@ jobs:
 
       - name: Ensure repo exists when purge is false
         if: ${{ env.ECR_PURGE != 'true' }}
-        shell: bash
         run: |
           set -euo pipefail
           if ! aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
@@ -373,11 +358,10 @@ jobs:
           fi
 
       - name: Discover ECR Public endpoint (alias or registryId) and login
-        shell: bash
         run: |
           set -euo pipefail
-          ALIAS="$(aws ecr-public describe-registries --region ${{ env.AWS_REGION }} --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
-          REGID="$(aws ecr-public describe-registries --region ${{ env.AWS_REGION }} --query 'registries[0].registryId' --output text 2>/dev/null || true)"
+          ALIAS="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
+          REGID="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryId' --output text 2>/dev/null || true)"
           if [[ -n "${ALIAS}" && "${ALIAS}" != "None" ]]; then
             REG="public.ecr.aws/${ALIAS}"
             echo "Using ECR Public alias: ${ALIAS}"
@@ -389,7 +373,7 @@ jobs:
             exit 1
           fi
           echo "REG=${REG}" >> "$GITHUB_ENV"
-          aws ecr-public get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin "${REG}"
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
 
       - name: Pull upstream images
         run: |
@@ -415,8 +399,10 @@ jobs:
     needs: [build-test]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     env:
-      APP_REPO: mashkenneth/public-student-reg-app/prod
-      SIG_REPO: mashkenneth/public-student-reg-app/prod-student-reg-app-sig
+      BE_REPO: mashkenneth/public-student-reg-app/prod-student-reg-app
+      BE_SIG_REPO: mashkenneth/public-student-reg-app/prod-student-reg-app-sig
+      FE_REPO: mashkenneth/public-student-reg-app/prod-student-frontend
+      FE_SIG_REPO: mashkenneth/public-student-reg-app/prod-student-frontend-sig
     steps:
       - uses: actions/checkout@v4
 
@@ -426,36 +412,19 @@ jobs:
           aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region:            us-east-1
 
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
 
-      - name: Cleanup legacy Private repos (Prod)
-        shell: bash
-        run: |
-          set -euo pipefail
-          LEGACY=(
-            "mashkenneth/public-student-reg-app/prod-student-reg-app"
-            "mashkenneth/public-student-reg-app/prod-student-frontend"
-            "mashkenneth/public-student-reg-app/prod-student-frontend-sig"
-          )
-          for repo in "${LEGACY[@]}"; do
-            if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
-              echo "Deleting legacy private repo ${repo} ..."
-              aws ecr delete-repository --repository-name "${repo}" --force >/dev/null || true
-            fi
-          done
-
       - name: (Dangerous) Delete & recreate ECR repos (Prod app)
-        shell: bash
         run: |
           set -euo pipefail
           if [[ "${ECR_PURGE}" != "true" ]]; then
             echo "ECR_PURGE is not true; skipping destructive purge."
             exit 0
           fi
-          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+          for repo in "${BE_REPO}" "${BE_SIG_REPO}" "${FE_REPO}" "${FE_SIG_REPO}"; do
             if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
               echo "Deleting repository ${repo} (force) ..."
               aws ecr delete-repository --repository-name "${repo}" --force >/dev/null
@@ -477,21 +446,22 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Push to Private ECR (single repo: backend + frontend)
+      - name: Push to Private ECR (backend + frontend)
         env:
           SHA: ${{ github.sha }}
         run: |
-          IMAGE_APP="${ECR_REGISTRY}/${APP_REPO}"
           # backend
-          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_APP}:backend-latest"
-          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_APP}:backend-${SHA::12}"
-          docker push "${IMAGE_APP}:backend-latest"
-          docker push "${IMAGE_APP}:backend-${SHA::12}"
+          IMAGE_B="${ECR_REGISTRY}/${BE_REPO}"
+          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_B}:latest"
+          docker tag "${IMAGE_BACKEND_LOCAL}" "${IMAGE_B}:${SHA::12}"
+          docker push "${IMAGE_B}:latest"
+          docker push "${IMAGE_B}:${SHA::12}"
           # frontend
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_APP}:frontend-latest"
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_APP}:frontend-${SHA::12}"
-          docker push "${IMAGE_APP}:frontend-latest"
-          docker push "${IMAGE_APP}:frontend-${SHA::12}"
+          IMAGE_F="${ECR_REGISTRY}/${FE_REPO}"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_F}:latest"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_F}:${SHA::12}"
+          docker push "${IMAGE_F}:latest"
+          docker push "${IMAGE_F}:${SHA::12}"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.6.0
@@ -500,30 +470,14 @@ jobs:
         env:
           SHA: ${{ github.sha }}
         run: |
-          IMAGE_APP="${ECR_REGISTRY}/${APP_REPO}"
-          SIG_APP="${ECR_REGISTRY}/${SIG_REPO}"
           # backend
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:backend-latest"
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:backend-${SHA::12}"
+          IMAGE_B="${ECR_REGISTRY}/${BE_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${BE_SIG_REPO}" cosign sign --yes "${IMAGE_B}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${BE_SIG_REPO}" cosign sign --yes "${IMAGE_B}:${SHA::12}"
           # frontend
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:frontend-latest"
-          COSIGN_REPOSITORY="${SIG_APP}" cosign sign --yes "${IMAGE_APP}:frontend-${SHA::12}"
-
-      - name: Verify only two private repos exist (Prod)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ALLOWED=("mashkenneth/public-student-reg-app/prod" "mashkenneth/public-student-reg-app/prod-student-reg-app-sig")
-          mapfile -t ALL < <(aws ecr describe-repositories             --query "repositories[?starts_with(repositoryName, \`mashkenneth/public-student-reg-app/\`)].repositoryName"             --output text | tr '	' '
-' | sed '/^$/d' || true)
-          declare -A OK; for a in "${ALLOWED[@]}"; do OK["$a"]=1; done
-          UNEXPECTED=()
-          for r in "${ALL[@]:-}"; do [[ -z "${OK[$r]:-}" ]] && UNEXPECTED+=("$r"); done
-          if ((${#UNEXPECTED[@]:-0} > 0)); then
-            echo "::error::Unexpected repos present:"; printf ' - %s
-' "${UNEXPECTED[@]}"; exit 1
-          fi
-          echo "✅ Exactly the expected two repos exist (Prod)."
+          IMAGE_F="${ECR_REGISTRY}/${FE_REPO}"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${FE_SIG_REPO}" cosign sign --yes "${IMAGE_F}:latest"
+          COSIGN_REPOSITORY="${ECR_REGISTRY}/${FE_SIG_REPO}" cosign sign --yes "${IMAGE_F}:${SHA::12}"
 
   publish-prod-infra:
     name: Publish Observability (Prod Public ECR) — purge ON
@@ -538,13 +492,12 @@ jobs:
           aws-access-key-id:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ fromJSON(secrets.AWS_DEPLOY_SECRET).AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
+          aws-region:            us-east-1
 
       - name: Sanity check caller identity
         run: aws sts get-caller-identity
 
       - name: (Dangerous) Delete & recreate ECR Public repo (Prod infra)
-        shell: bash
         run: |
           set -euo pipefail
           if [[ "${ECR_PURGE}" != "true" ]]; then
@@ -560,7 +513,6 @@ jobs:
 
       - name: Ensure repo exists when purge is false
         if: ${{ env.ECR_PURGE != 'true' }}
-        shell: bash
         run: |
           set -euo pipefail
           if ! aws ecr-public describe-repositories --repository-names "${OBS_REPO_NAME}" >/dev/null 2>&1; then
@@ -571,11 +523,10 @@ jobs:
           fi
 
       - name: Discover ECR Public endpoint (alias or registryId) and login
-        shell: bash
         run: |
           set -euo pipefail
-          ALIAS="$(aws ecr-public describe-registries --region ${{ env.AWS_REGION }} --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
-          REGID="$(aws ecr-public describe-registries --region ${{ env.AWS_REGION }} --query 'registries[0].registryId' --output text 2>/dev/null || true)"
+          ALIAS="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryAlias' --output text 2>/dev/null || true)"
+          REGID="$(aws ecr-public describe-registries --region us-east-1 --query 'registries[0].registryId' --output text 2>/dev/null || true)"
           if [[ -n "${ALIAS}" && "${ALIAS}" != "None" ]]; then
             REG="public.ecr.aws/${ALIAS}"
             echo "Using ECR Public alias: ${ALIAS}"
@@ -587,7 +538,7 @@ jobs:
             exit 1
           fi
           echo "REG=${REG}" >> "$GITHUB_ENV"
-          aws ecr-public get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin "${REG}"
+          aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${REG}"
 
       - name: Pull upstream images
         run: |
