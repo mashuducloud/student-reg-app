@@ -60,6 +60,8 @@ jobs:
         run: bandit -r backend/ || true
       - name: Dependency Security Scan (pip-audit)
         run: pip install -r backend/requirements.txt && pip-audit -r backend/requirements.txt
+      - name: DEBUG - List files in root directory
+        run: ls -la
       - name: Comprehensive YAML Lint
         run: yamllint -d relaxed .
 
@@ -341,5 +343,5 @@ jobs:
           docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
           docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
           docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags tools
+          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
       # Rest of the steps are identical to pre-prod and omitted for brevity
