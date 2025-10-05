@@ -262,25 +262,30 @@ jobs:
         run: |
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
-          docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
-          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
 
-          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
-          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          UPSTREAM_PROM="prom/prometheus:${{ env.PROMETHEUS_VERSION }}"
+          TARGET_PROM="${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker pull "${UPSTREAM_PROM}"
+          docker tag "${UPSTREAM_PROM}" "${TARGET_PROM}"
+          docker push "${TARGET_PROM}"
 
-          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
-          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          UPSTREAM_GRAF="grafana/grafana:${{ env.GRAFANA_VERSION }}"
+          TARGET_GRAF="${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker pull "${UPSTREAM_GRAF}"
+          docker tag "${UPSTREAM_GRAF}" "${TARGET_GRAF}"
+          docker push "${TARGET_GRAF}"
 
-          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
-          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          UPSTREAM_OTEL="otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}"
+          TARGET_OTEL="${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker pull "${UPSTREAM_OTEL}"
+          docker tag "${UPSTREAM_OTEL}" "${TARGET_OTEL}"
+          docker push "${TARGET_OTEL}"
+
+          UPSTREAM_TEMPO="grafana/tempo:${{ env.TEMPO_VERSION }}"
+          TARGET_TEMPO="${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker pull "${UPSTREAM_TEMPO}"
+          docker tag "${UPSTREAM_TEMPO}" "${TARGET_TEMPO}"
+          docker push "${TARGET_TEMPO}"
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -346,22 +351,27 @@ jobs:
         run: |
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
-          docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
-          docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
 
-          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
-          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          UPSTREAM_PROM="prom/prometheus:${{ env.PROMETHEUS_VERSION }}"
+          TARGET_PROM="${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
+          docker pull "${UPSTREAM_PROM}"
+          docker tag "${UPSTREAM_PROM}" "${TARGET_PROM}"
+          docker push "${TARGET_PROM}"
 
-          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
-          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          UPSTREAM_GRAF="grafana/grafana:${{ env.GRAFANA_VERSION }}"
+          TARGET_GRAF="${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker pull "${UPSTREAM_GRAF}"
+          docker tag "${UPSTREAM_GRAF}" "${TARGET_GRAF}"
+          docker push "${TARGET_GRAF}"
 
-          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
-          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} \
-            "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          UPSTREAM_OTEL="otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}"
+          TARGET_OTEL="${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker pull "${UPSTREAM_OTEL}"
+          docker tag "${UPSTREAM_OTEL}" "${TARGET_OTEL}"
+          docker push "${TARGET_OTEL}"
+
+          UPSTREAM_TEMPO="grafana/tempo:${{ env.TEMPO_VERSION }}"
+          TARGET_TEMPO="${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker pull "${UPSTREAM_TEMPO}"
+          docker tag "${UPSTREAM_TEMPO}" "${TARGET_TEMPO}"
+          docker push "${TARGET_TEMPO}"
