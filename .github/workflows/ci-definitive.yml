@@ -270,9 +270,14 @@ jobs:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
           docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
           docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          # Repeat for Grafana, OTel, and Tempo...
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -335,6 +340,11 @@ jobs:
           set -ex
           REG="public.ecr.aws/${{ env.ECR_PUBLIC_ALIAS }}"
           docker pull prom/prometheus:${{ env.PROMETHEUS_VERSION }}
+          docker pull grafana/grafana:${{ env.GRAFANA_VERSION }}
+          docker pull otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}
+          docker pull grafana/tempo:${{ env.TEMPO_VERSION }}
           docker tag prom/prometheus:${{ env.PROMETHEUS_VERSION }} "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker push "${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          # Repeat for Grafana, OTel, and Tempo...
+          docker tag grafana/grafana:${{ env.GRAFANA_VERSION }} "${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
+          docker tag otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }} "${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
+          docker tag grafana/tempo:${{ env.TEMPO_VERSION }} "${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
+          docker push "${REG}/${{ env.OBS_REPO }}" --all-tags
