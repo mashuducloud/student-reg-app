@@ -1,0 +1,41 @@
+diff --git a/.github/workflows/ci-cd_Integrated_student-Reg-App_final.yml b/.github/workflows/ci-cd_Integrated_student-Reg-App_final.yml
+@@
+-      - name: Comprehensive YAML Lint
+-        run: yamllint .
++      - name: Comprehensive YAML Lint
++        run: yamllint -c .yamllint.yml .
+@@
+-      - name: Start services using Docker Compose
+-        run: docker compose -f infra/docker-compose.yml up -d
++      - name: Start services using Docker Compose
++        run: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d
+@@
+-      - name: Upload image artifacts
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: image-artifacts
+-          path: |
+-            backend-image.tar
+-            frontend-image.tar
++      - name: Upload image artifacts
++        uses: actions/upload-artifact@v4
++        with:
++          name: image-artifacts
++          path: |
++            backend-image.tar
++            frontend-image.tar
++          retention-days: 7
+@@
+-      - name: Upload Test & Coverage Artifacts
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: test-reports
+-          path: coverage/
+-          if-no-files-found: ignore
++      - name: Upload Test & Coverage Artifacts
++        uses: actions/upload-artifact@v4
++        with:
++          name: test-reports
++          path: coverage/
++          if-no-files-found: ignore
++          retention-days: 7
