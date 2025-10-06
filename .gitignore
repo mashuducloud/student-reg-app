@@ -32,3 +32,5 @@ Thumbs.db
 # node_modules/
 # dist/
 # build/
+
+fix-*.patch
