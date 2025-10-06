@@ -300,6 +300,21 @@ jobs:
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
 
+      - name: Login to Amazon ECR (Private and Public)
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+          | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+          aws ecr-public get-login-password --region us-east-1 \
+          | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Ensure Private ECR repos exist (preprod)
+        run: |
+          set -e
+          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+            aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "$repo"
+          done
+
       - name: Detect ECR Public alias + ensure repo (preprod)
         id: ecrpub_pre
         env:
@@ -333,6 +348,42 @@ jobs:
           echo "Detected alias (output): ${{ steps.ecrpub_pre.outputs.alias }}"
           aws ecr-public describe-registries --region us-east-1 \
             --query "registries[].aliases[].name | [0]" --output text
+
+      - name: Push App Images to Private ECR (preprod)
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -ex
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+
+          echo "== Show local images (before tagging) =="
+          docker images --format '{{.Repository}}:{{.Tag}}' | sort | uniq | sed -n '1,200p'
+
+          docker tag "${IMAGE_BACKEND_LOCAL}"  "${IMAGE_DEST}:backend-${SHA::12}"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_DEST}:frontend-${SHA::12}"
+
+          echo "== Show the ECR-tagged images we will push =="
+          docker images "${IMAGE_DEST}" --format '{{.Repository}}:{{.Tag}}'
+
+          echo "== Push each tag explicitly =="
+          docker push "${IMAGE_DEST}:backend-${SHA::12}"
+          docker push "${IMAGE_DEST}:frontend-${SHA::12}"
+
+          echo "== Verify images now exist in ECR (preprod) =="
+          aws ecr list-images --repository-name "${APP_REPO}" \
+            --query 'imageIds[].imageTag' --output text
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Sign Private images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
+          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
 
       - name: Push Observability Stack to Public ECR
         env:
@@ -415,6 +466,21 @@ jobs:
       - name: Load Docker images
         run: docker load < backend-image.tar && docker load < frontend-image.tar
 
+      - name: Login to Amazon ECR (Private and Public)
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+          | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+          aws ecr-public get-login-password --region us-east-1 \
+          | docker login --username AWS --password-stdin public.ecr.aws
+
+      - name: Ensure Private ECR repos exist (prod)
+        run: |
+          set -e
+          for repo in "${APP_REPO}" "${SIG_REPO}"; do
+            aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "$repo"
+          done
+
       - name: Detect ECR Public alias + ensure repo (prod)
         id: ecrpub_prod
         env:
@@ -448,6 +514,42 @@ jobs:
           echo "Detected alias (output): ${{ steps.ecrpub_prod.outputs.alias }}"
           aws ecr-public describe-registries --region us-east-1 \
             --query "registries[].aliases[].name | [0]" --output text
+
+      - name: Push App Images to Private ECR (prod)
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -ex
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+
+          echo "== Show local images (before tagging) =="
+          docker images --format '{{.Repository}}:{{.Tag}}' | sort | uniq | sed -n '1,200p'
+
+          docker tag "${IMAGE_BACKEND_LOCAL}"  "${IMAGE_DEST}:backend-${SHA::12}"
+          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_DEST}:frontend-${SHA::12}"
+
+          echo "== Show the ECR-tagged images we will push =="
+          docker images "${IMAGE_DEST}" --format '{{.Repository}}:{{.Tag}}'
+
+          echo "== Push each tag explicitly =="
+          docker push "${IMAGE_DEST}:backend-${SHA::12}"
+          docker push "${IMAGE_DEST}:frontend-${SHA::12}"
+
+          echo "== Verify images now exist in ECR (prod) =="
+          aws ecr list-images --repository-name "${APP_REPO}" \
+            --query 'imageIds[].imageTag' --output text
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Sign Private images
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
+          IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
+          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
+          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
 
       - name: Push Observability Stack to Public ECR
         env:
