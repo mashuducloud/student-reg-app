@@ -1,25 +1,26 @@
-import time
 import logging
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import time
+
 import mysql.connector
 from config import DB_CONFIG
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 # --- OpenTelemetry Imports ---
-from opentelemetry import trace, metrics
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry import metrics, trace
+from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as OTLPGrpcExporter,
 )
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
-from opentelemetry.sdk.metrics import MeterProvider
-from prometheus_client import start_http_server
-from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace import Status, StatusCode
+from prometheus_client import start_http_server
 
 # --- Resource & Tracing Setup ---
 resource = Resource(attributes={"service.name": "student-registration-service"})
@@ -44,9 +45,7 @@ log = logging.getLogger(__name__)
 
 # --- Metrics Setup ---
 prometheus_reader = PrometheusMetricReader()
-metrics.set_meter_provider(
-    MeterProvider(resource=resource, metric_readers=[prometheus_reader])
-)
+metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[prometheus_reader]))
 meter = metrics.get_meter(__name__)
 
 request_counter = meter.create_counter(
@@ -183,13 +182,11 @@ def register_student():
             with tracer.start_as_current_span("db_insert_student") as db_span:
                 db_span.set_attribute(
                     "db.statement",
-                    "INSERT INTO students (first_name, last_name, email) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT INTO students (first_name, last_name, email) VALUES (?, ?, ?)",
                 )
                 cursor = connection.cursor()
                 cursor.execute(
-                    "INSERT INTO students (first_name, last_name, email) "
-                    "VALUES (%s, %s, %s)",
+                    "INSERT INTO students (first_name, last_name, email) VALUES (%s, %s, %s)",
                     (first_name, last_name, email),
                 )
                 connection.commit()

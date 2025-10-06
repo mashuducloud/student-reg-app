@@ -1,5 +1,6 @@
-import pytest
 import json
+
+import pytest
 from main import app, create_db_connection
 
 
@@ -56,9 +57,7 @@ def test_register_success(monkeypatch, client):
 
     response = client.post(
         "/register",
-        data=json.dumps(
-            {"first_name": "Jane", "last_name": "Doe", "email": "jane.doe@example.com"}
-        ),
+        data=json.dumps({"first_name": "Jane", "last_name": "Doe", "email": "jane.doe@example.com"}),
         content_type="application/json",
     )
 
@@ -74,9 +73,7 @@ def test_register_db_failure(monkeypatch, client):
 
     response = client.post(
         "/register",
-        data=json.dumps(
-            {"first_name": "Fail", "last_name": "Case", "email": "fail@example.com"}
-        ),
+        data=json.dumps({"first_name": "Fail", "last_name": "Case", "email": "fail@example.com"}),
         content_type="application/json",
     )
 

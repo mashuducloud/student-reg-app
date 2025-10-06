@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-from pathlib import Path
-from html import escape
-import os, json
+import json
+import os
 from datetime import datetime, timezone
+from html import escape
+from pathlib import Path
+
 
 def read_text(path: str, limit: int = 200_000):
     p = Path(path)
@@ -16,6 +18,7 @@ def read_text(path: str, limit: int = 200_000):
     except Exception as e:
         return f"[error reading {path}: {e}]"
 
+
 def try_json(path: str):
     p = Path(path)
     if not p.exists():
@@ -25,20 +28,23 @@ def try_json(path: str):
     except Exception:
         return None
 
+
 def section(title, body_html):
     return f"""<section class="card">
   <h2>{escape(title)}</h2>
   {body_html}
 </section>"""
 
+
 def pre_block(text, lang=""):
     cl = f" class='code {lang}'" if lang else " class='code'"
     return f"<pre{cl}><code>{escape(text)}</code></pre>"
 
+
 now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-repo = os.getenv("GITHUB_REPOSITORY","")
-run_url = f"{os.getenv('GITHUB_SERVER_URL','https://github.com')}/{repo}/actions/runs/{os.getenv('GITHUB_RUN_ID','')}"
-commit = os.getenv("GITHUB_SHA","")
+repo = os.getenv("GITHUB_REPOSITORY", "")
+run_url = f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{os.getenv('GITHUB_RUN_ID', '')}"
+commit = os.getenv("GITHUB_SHA", "")
 
 compose_cfg = read_text("compose.config.yaml")
 targets = try_json("prom_targets.json")
@@ -59,9 +65,9 @@ if compose_cfg:
 if targets:
     rows = []
     for t in targets.get("data", {}).get("activeTargets", []):
-        job = t.get("labels",{}).get("job","")
-        url = t.get("scrapeUrl","")
-        last = t.get("lastScrape","")
+        job = t.get("labels", {}).get("job", "")
+        url = t.get("scrapeUrl", "")
+        last = t.get("lastScrape", "")
         rows.append(f"<tr><td>{escape(job)}</td><td>{escape(url)}</td><td>{escape(last)}</td></tr>")
     table = "<table><tr><th>job</th><th>scrapeUrl</th><th>lastScrape</th></tr>" + "".join(rows) + "</table>"
     sections += section("Prometheus active targets", table)

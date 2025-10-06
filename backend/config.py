@@ -1,9 +1,10 @@
+import logging
 import os
 import sys
-import logging
-from prometheus_client import Counter
+
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+from prometheus_client import Counter
 
 # Logger
 logging.basicConfig(level=logging.INFO)

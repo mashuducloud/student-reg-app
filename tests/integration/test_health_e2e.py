@@ -1,9 +1,11 @@
 import os
 import time
+
 import requests
 
 BASE = os.getenv("APP_BASE_URL", "http://localhost:5000")
 METRICS = os.getenv("METRICS_URL", "http://localhost:9100/metrics")
+
 
 def wait_http(url, timeout=120):
     start = time.time()
@@ -17,8 +19,10 @@ def wait_http(url, timeout=120):
         time.sleep(2)
     raise AssertionError(f"Timeout waiting for {url}")
 
+
 def test_health_ready():
     assert wait_http(f"{BASE}/health", 120)
+
 
 def test_metrics_exposed():
     wait_http(METRICS, 120)

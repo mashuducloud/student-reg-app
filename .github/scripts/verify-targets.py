@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import sys, json, urllib.request
+import json
+import sys
+import urllib.request
 
 URL = "http://localhost:9091/api/v1/targets?state=active"
 required = {"prometheus", "student-app", "otel-collector"}
