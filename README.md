@@ -721,7 +721,7 @@ def test_create_db_connection_failure(monkeypatch):
 
     class FailingConnector:
         @staticmethod
-        def connect(**kwargs): 
+        def connect(**kwargs):
             raise DummyError("DB connection failed")
 
     import main

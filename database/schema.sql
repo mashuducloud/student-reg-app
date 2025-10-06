@@ -51,4 +51,3 @@ CREATE TABLE IF NOT EXISTS students (
 -- 4. (Optional) Describe the table structure
 -- You can run this command after creation to verify the table schema.
 DESCRIBE students;
-

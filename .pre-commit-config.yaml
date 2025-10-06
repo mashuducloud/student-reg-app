@@ -1,0 +1,14 @@
+default_language_version:
+  python: python3.13
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer   # ensures exactly one newline at EOF
+      - id: trailing-whitespace # trims stray spaces
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        files: '\.(yml|yaml)$'
+        args: ['-c', '.yamllint']

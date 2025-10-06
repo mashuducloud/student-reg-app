@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "rulePriority": 10,
+      "description": "Expire untagged signatures older than 30 days",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 30
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 20,
+      "description": "Keep last 60 signature tags; expire older ones",
+      "selection": {
+        "tagStatus": "tagged",
+        "countType": "imageCountMoreThan",
+        "countNumber": 60
+      },
+      "action": { "type": "expire" }
+    }
+  ]
+}
