@@ -8,3 +8,8 @@ infra/.env
 *.env
 infra/.env
 .env.example
+# Tool caches
+.pre-commit-cache/
+.ruff_cache/
+.pytest_cache/
+.cache/
