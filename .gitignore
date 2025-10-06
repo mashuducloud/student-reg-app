@@ -1,15 +1,34 @@
- # Virtual Environment
+# --- Python / virtualenvs ---
+.venv/
 venv/
 __pycache__/
-.env
-infra/.env
-# Local environment files (never commit)
+*.pyc
+
+# --- Environment files (never commit real secrets) ---
 .env
 *.env
 infra/.env
-.env.example
-# Tool caches
+# Tip: usually you DO commit a template:
+# !.env.example
+
+# --- Tool caches ---
 .pre-commit-cache/
 .ruff_cache/
 .pytest_cache/
+.mypy_cache/
 .cache/
+
+# --- Coverage artifacts ---
+.coverage
+coverage.xml
+coverage/
+htmlcov/
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- (Optional) Frontend build outputs ---
+# node_modules/
+# dist/
+# build/
