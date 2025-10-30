@@ -1,0 +1,132 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Registration</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Use Inter as the default font */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+
+    <!-- Main container for the registration form -->
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-lg p-8 m-4">
+
+        <!-- Header Section -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Student Registration</h1>
+            <p class="text-gray-500 mt-2">Fill out the form below to register a new student.</p>
+        </div>
+
+        <!-- Registration Form -->
+        <form id="registrationForm">
+            <!-- First Name Input -->
+            <div class="mb-5">
+                <label for="first_name" class="block mb-2 text-sm font-medium text-gray-700">First Name</label>
+                <input type="text" id="first_name" name="first_name" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-3 transition duration-300" placeholder="e.g., John" required>
+            </div>
+
+            <!-- Last Name Input -->
+            <div class="mb-5">
+                <label for="last_name" class="block mb-2 text-sm font-medium text-gray-700">Last Name</label>
+                <input type="text" id="last_name" name="last_name" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-3 transition duration-300" placeholder="e.g., Doe" required>
+            </div>
+
+            <!-- Email Input -->
+            <div class="mb-6">
+                <label for="email" class="block mb-2 text-sm font-medium text-gray-700">Email Address</label>
+                <input type="email" id="email" name="email" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-3 transition duration-300" placeholder="e.g., john.doe@example.com" required>
+            </div>
+
+            <!-- Submit Button -->
+            <button type="submit" id="submitButton" class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-3 text-center transition duration-300 ease-in-out transform hover:scale-105">
+                Register Student
+            </button>
+        </form>
+
+        <!-- Message Area for displaying success or error messages -->
+        <div id="message" class="mt-6 text-center text-sm font-medium"></div>
+    </div>
+
+    <script>
+        // Get references to the form and message elements
+        const form = document.getElementById('registrationForm');
+        const messageDiv = document.getElementById('message');
+        const submitButton = document.getElementById('submitButton');
+
+        // Add an event listener for the form submission
+        form.addEventListener('submit', async function(event) {
+            // Prevent the default form submission behavior (which reloads the page)
+            event.preventDefault();
+
+            // Change button text and disable it to prevent multiple submissions
+            submitButton.textContent = 'Registering...';
+            submitButton.disabled = true;
+
+            // Clear any previous messages
+            messageDiv.textContent = '';
+            messageDiv.className = 'mt-6 text-center text-sm font-medium';
+
+            // Create a FormData object from the form
+            const formData = new FormData(form);
+            // Convert the FormData object to a plain JavaScript object
+            const studentData = Object.fromEntries(formData.entries());
+
+            try {
+                // The URL of the backend API endpoint.
+                // This assumes the Flask server is running on localhost:5000.
+                //const apiUrl = 'http://localhost:5000/register';
+
+                const apiUrl = window.location.hostname === "localhost"
+                    ? "http://localhost:5000/register"
+                    : "http://student-app:5000/register";
+
+                // Make a POST request to the backend API using the fetch() function
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    // Convert the JavaScript object to a JSON string for the request body
+                    body: JSON.stringify(studentData)
+                });
+
+                // Parse the JSON response from the server
+                const result = await response.json();
+
+                // Check if the request was successful (HTTP status 200-299)
+                if (response.ok) {
+                    // Display a success message
+                    messageDiv.textContent = result.message || 'Registration successful!';
+                    messageDiv.classList.add('text-green-600');
+                    // Reset the form fields
+                    form.reset();
+                } else {
+                    // If the server returned an error, display it
+                    throw new Error(result.error || 'An unknown error occurred.');
+                }
+
+            } catch (error) {
+                // If an error occurs during the fetch request (e.g., network error)
+                messageDiv.textContent = `Error: ${error.message}`;
+                messageDiv.classList.add('text-red-600');
+            } finally {
+                // Re-enable the button and restore its original text
+                submitButton.textContent = 'Register Student';
+                submitButton.disabled = false;
+            }
+        });
+    </script>
+
+</body>
+</html>

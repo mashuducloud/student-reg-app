@@ -1,0 +1,134 @@
+---
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    container_name: student-app
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    ports:
+      - "5000:5000"   # Flask API
+      - "9100:9100"   # Prometheus metrics
+    env_file:
+      - ./.env
+    networks:
+      - observability-network
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+  mysql-db:
+    image: mysql:8.0
+    container_name: mysql-db
+    restart: always
+    env_file:
+      - ./.env
+    ports:
+      - "3307:3306"
+    networks:
+      - observability-network
+    volumes:
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: |
+        mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+  frontend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
+    container_name: student-frontend
+    ports:
+      - "8080:80"
+    networks:
+      - observability-network
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  otel-collector:
+    image: otel/opentelemetry-collector:0.135.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "43171:4317"
+      - "43181:4318"
+    restart: always
+    networks:
+      - observability-network
+  tempo:
+    image: grafana/tempo:2.8.0
+    container_name: infra-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3201:3200"
+    restart: always
+    networks:
+      - observability-network
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: infra-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+    restart: always
+    networks:
+      - observability-network
+  grafana:
+    image: grafana/grafana:12.2.0
+    container_name: infra-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3300:3000"
+    restart: always
+    networks:
+      - observability-network
+  tests:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    container_name: student-api-tests
+    working_dir: /app
+    command: pytest test_app.py --cov=. --cov-report=term-missing -v
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      DB_HOST: mysql-db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      PYTHONPATH: /app
+    networks:
+      - observability-network
+    restart: "no"
+networks:
+  observability-network:
+    driver: bridge

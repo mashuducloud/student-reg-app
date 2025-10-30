@@ -1,0 +1,12 @@
+#FROM mirror.gcr.io/library/nginx:alpine
+FROM nginx:alpine
+
+# Pull security updates (fixes libexpat CVE) and install curl for healthcheck
+RUN apk update \
+  && apk upgrade --no-cache \
+  && apk add --no-cache curl
+
+# Static site
+COPY frontend/index.html /usr/share/nginx/html/index.html
+
+EXPOSE 80

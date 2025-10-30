@@ -1,0 +1,29 @@
+---
+# OpenTelemetry Collector configuration for receiving traces and metrics from the application
+# and exporting traces to Tempo and metrics to Prometheus.
+receivers:
+  otlp:
+    protocols:
+      grpc:        # Receive from app via gRPC
+        endpoint: 0.0.0.0:4317
+      http:        # Receive from app via HTTP
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp:       # Use HTTP to send to Tempo
+    endpoint: http://tempo:4318
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: "0.0.0.0:9464"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp]
+
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
