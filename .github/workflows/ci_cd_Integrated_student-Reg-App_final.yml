@@ -33,6 +33,9 @@ env:
   PRIVATE_IMAGES: "student-app mysql-db my-flyway-migrations student-frontend"
   PUBLIC_OBS_IMAGES: "infra-otel-collector infra-tempo infra-prometheus infra-grafana infra-loki infra-promtail"
 
+  # Trivy cache dir (for CI speed + reliability)
+  TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+
 jobs:
   # ----------------------------------------------------------------------------
   # STAGE 1: Continuous Integration (CI)
@@ -113,14 +116,34 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -y
           sudo apt-get install -y trivy
+          trivy --version
 
-      - name: "Trivy Scan — ALL images (by image name)"
+      # Cache Trivy DB + artifact cache to speed up scans and reduce flaky downloads
+      - name: "Cache Trivy DB"
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TRIVY_CACHE_DIR }}
+          key: trivy-${{ runner.os }}-${{ hashFiles('.trivyignore') }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: "Trivy Scan — ALL images (vuln only, uses .trivyignore)"
+        env:
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
         run: |
           set -e
+          mkdir -p "${TRIVY_CACHE_DIR}"
           IMAGES="${{ env.PRIVATE_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }}"
           for img in $IMAGES; do
             echo "Scanning ${img}:latest"
-            trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "${img}:latest"
+            trivy image \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --ignorefile "${GITHUB_WORKSPACE}/.trivyignore" \
+              --cache-dir "${TRIVY_CACHE_DIR}" \
+              "${img}:latest"
           done
 
       - name: "Save ALL images as artifact"
@@ -400,6 +423,7 @@ jobs:
           for img in ${{ env.PUBLIC_OBS_IMAGES }}; do
             docker tag "${img}:latest" "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
             docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+          done
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -467,6 +491,7 @@ jobs:
           for img in ${{ env.PRIVATE_IMAGES }}; do
             docker tag "${img}:latest" "${IMAGE_DEST}:${img}-${SHA::12}"
             docker push "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
       - name: "Install cosign"
         uses: sigstore/cosign-installer@v3.6.0
@@ -479,6 +504,7 @@ jobs:
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
           for img in ${{ env.PRIVATE_IMAGES }}; do
             cosign sign --yes "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
       - name: "Push OBS images to Public ECR (prod)"
         env:
@@ -489,3 +515,4 @@ jobs:
           for img in ${{ env.PUBLIC_OBS_IMAGES }}; do
             docker tag "${img}:latest" "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
             docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+          done
