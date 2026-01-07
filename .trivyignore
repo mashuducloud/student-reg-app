@@ -36,3 +36,10 @@ CVE-2025-59250 # expires: 2026-02-15  # flyway: mssql-jdbc 12.6.3.jre11 -> 12.6.
 CVE-2025-55163 # expires: 2026-02-15  # flyway: grpc-netty-shaded 1.68.0 -> 1.75.0
 CVE-2025-24970 # expires: 2026-02-15  # flyway: netty-handler 4.1.94.Final -> 4.1.118.Final
 CVE-2025-24789 # expires: 2026-02-15  # flyway: snowflake-jdbc 3.20.0 -> 3.22.0
+
+# ---------------------------------
+# infra-otel-collector / otelcol (gobinary)
+# ---------------------------------
+# Trivy reports a fixed version exists in upstream collector builds.
+# expires: 2026-02-15  otelcol: github.com/expr-lang/expr v1.17.6 -> 1.17.7
+CVE-2025-68156
