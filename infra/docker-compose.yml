@@ -1,12 +1,12 @@
 ---
 services:
   app:
-    image: student-app
     build:
       context: ..
       dockerfile: infra/Dockerfile.backend
       args:
         INSTALL_DEV: "false"   # prod image: no pytest etc.
+    image: student-app
     container_name: student-app
     depends_on:
       mysql-db:
@@ -29,10 +29,10 @@ services:
       start_period: 60s
 
   mysql-db:
-    image: mysql-db
     build:
       context: ..
       dockerfile: infra/Dockerfile.db
+    image: mysql-db
     container_name: mysql-db
     restart: always
     env_file:
@@ -83,10 +83,10 @@ services:
       - ${DOCKER_NETWORK}
 
   frontend:
-    image: student-frontend
     build:
       context: ..
       dockerfile: infra/Dockerfile.frontend
+    image: student-frontend
     container_name: student-frontend
     ports:
       - "8080:80"
@@ -144,10 +144,10 @@ services:
       # and you already confirmed /metrics works from the host.
 
   prometheus:
-    image: infra-prometheus
     build:
       context: ..
       dockerfile: infra/Dockerfile.prometheus
+    image: infra-prometheus
     container_name: infra-prometheus
     ports:
       - "9091:9090"
@@ -224,6 +224,7 @@ services:
       dockerfile: infra/Dockerfile.backend
       args:
         INSTALL_DEV: "true"   # 👈 see next section
+    image: student-api-tests
     container_name: student-api-tests
     working_dir: /app
     command: pytest test_app.py --cov=. --cov-report=term-missing -v
