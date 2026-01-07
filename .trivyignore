@@ -1,0 +1,9 @@
+# OS package in upstream base layer
+CVE-2025-6965
+
+# mysqlsh bundled python deps
+CVE-2025-47273
+
+# gosu binary built with older Go stdlib
+CVE-2025-58183
+CVE-2025-61729
