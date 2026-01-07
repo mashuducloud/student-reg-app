@@ -33,4 +33,4 @@ gunicorn==23.0.0
 
 # JWT and Authetication
 PyJWT[crypto]==2.9.0
-requests==2.32.3
+requests==2.32.4
