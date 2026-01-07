@@ -2,8 +2,8 @@
 # 🐬 Dockerfile.db — MySQL Database Image for student-reg-app
 # -------------------------------------------------------------------
 
-# Base: official MySQL 8.0 image
-FROM mysql:8.0
+# Prefer a patch-pinned tag that includes security fixes
+FROM mysql:8.0.42
 
 # -------------------------------------------------------------------
 # ❌ Remove automatic schema initialization
