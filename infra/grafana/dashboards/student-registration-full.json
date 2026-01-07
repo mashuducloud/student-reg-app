@@ -1,0 +1,137 @@
+{
+  "id": null,
+  "uid": "student-reg-full",
+  "title": "Student Registration - Full Observability",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Total Registration Requests",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "student_registration_requests_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Last Registration Count",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "student_registration_requests_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Target Health (up by job & instance)",
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "expr": "up",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Application Logs (student-app)",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 10 },
+      "datasource": "Loki",
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{container=\"student-app\"}"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Infrastructure Logs (otel, tempo, promtail, prometheus, grafana)",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 10 },
+      "datasource": "Loki",
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "dedupStrategy": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{container=~\"otel-collector|infra-tempo|infra-promtail|infra-prometheus|infra-grafana\"}"
+        }
+      ]
+    },
+    {
+      "type": "traces",
+      "title": "Recent Traces - Student Registration",
+      "gridPos": { "x": 0, "y": 26, "w": 24, "h": 10 },
+      "datasource": "Tempo",
+      "options": {
+        "showSpanBar": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"student-registration-service\"}"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "name": "job",
+        "label": "Prometheus Job",
+        "datasource": "Prometheus",
+        "query": "label_values(up, job)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  }
+}

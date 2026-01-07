@@ -11,9 +11,15 @@ opentelemetry-exporter-otlp==1.28.2
 opentelemetry-exporter-prometheus==0.49b0
 prometheus-client==0.20.0
 
+opentelemetry-distro
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-flask
+opentelemetry-instrumentation-logging
+opentelemetry-instrumentation-requests
+
 # Testing
-pytest==8.4.2
-pytest-cov==7.0.0
+# pytest==8.4.2
+# pytest-cov==7.0.0
 
 # Supporting packages
 colorama==0.4.6
@@ -22,3 +28,9 @@ iniconfig==2.1.0
 packaging==25.0
 pluggy==1.6.0
 Pygments==2.19.2
+
+gunicorn==23.0.0
+
+# JWT and Authetication
+PyJWT[crypto]==2.9.0
+requests==2.32.3

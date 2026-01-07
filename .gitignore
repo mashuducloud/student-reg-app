@@ -34,3 +34,5 @@ Thumbs.db
 # build/
 
 fix-*.patch
+
+.terraform

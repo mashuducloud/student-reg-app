@@ -1,0 +1,22 @@
+# -------------------------------------------------------------------
+# 🕵️ Dockerfile.tempo — Grafana Tempo for student-reg-app
+# -------------------------------------------------------------------
+
+FROM grafana/tempo:2.8.0
+
+# Copy your Tempo configuration into the container
+# (This path is correct when docker-compose uses context: ..)
+COPY infra/tempo.yaml /etc/tempo.yaml
+
+# Default Tempo ports
+# 3200: HTTP API/UI
+# 9095: gRPC (used internally)
+EXPOSE 3200 9095
+
+# NOTE:
+# The base image does not have a package manager (no apk/apt) or curl/wget
+# so we do NOT add extra tools or a Dockerfile-level HEALTHCHECK here.
+# Health can be checked from the host or via docker-compose if needed.
+
+# Start Tempo with the provided config
+CMD ["-config.file=/etc/tempo.yaml"]

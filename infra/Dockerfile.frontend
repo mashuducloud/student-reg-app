@@ -1,12 +1,71 @@
-#FROM mirror.gcr.io/library/nginx:alpine
+# ------------------------------------------------------------------------------
+# Frontend Dockerfile for Student Registration App
+# React build + NGINX static hosting
+# ------------------------------------------------------------------------------
+
+### 1️⃣ Build stage: build the React app
+FROM node:20-alpine AS build
+
+# Set workdir in build container
+WORKDIR /app
+
+# Install dependencies first (better Docker cache usage)
+# Assumes your React project root is ./frontend relative to repo root
+COPY frontend/package*.json ./
+RUN npm install
+
+# Copy the rest of the React source
+COPY frontend/ .
+
+# Build the production bundle
+# Make sure your package.json has: "build": "react-scripts build" / "vite build" / etc.
+RUN npm run build
+
+# ------------------------------------------------------------------------------
+### 2️⃣ Runtime stage: NGINX to serve the built app
+# ------------------------------------------------------------------------------
+
+# Base image (alpine variant for small footprint)
 FROM nginx:alpine
 
-# Pull security updates (fixes libexpat CVE) and install curl for healthcheck
+# ------------------------------------------------------------------------------
+# 🧩 System setup: security patches + health tools
+# ------------------------------------------------------------------------------
+
+# Upgrade system packages and install curl for container healthchecks
 RUN apk update \
-  && apk upgrade --no-cache \
-  && apk add --no-cache curl
+ && apk upgrade --no-cache \
+ && apk add --no-cache curl \
+ && rm -rf /var/cache/apk/*
 
-# Static site
-COPY frontend/index.html /usr/share/nginx/html/index.html
+# ------------------------------------------------------------------------------
+# 🧱 Runtime configuration
+# ------------------------------------------------------------------------------
 
-EXPOSE 80
+# Define environment variables for runtime configurability (optional)
+ENV APP_HOME=/usr/share/nginx/html \
+    NGINX_PORT=80
+
+WORKDIR ${APP_HOME}
+
+# Remove default NGINX static content
+RUN rm -rf ./*
+
+# Copy built React app from the build stage into NGINX html directory
+# ⚠️ If your build output is "build" (Create React App), change "dist" to "build".
+COPY --from=build /app/dist/ ${APP_HOME}/
+
+# ------------------------------------------------------------------------------
+# 🩺 Healthcheck (NGINX reachability)
+# ------------------------------------------------------------------------------
+
+# Checks that NGINX responds on the configured port
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:${NGINX_PORT}/index.html || exit 1
+
+# ------------------------------------------------------------------------------
+# 🚪 Expose port and start server
+# ------------------------------------------------------------------------------
+
+EXPOSE ${NGINX_PORT}
+CMD ["nginx", "-g", "daemon off;"]

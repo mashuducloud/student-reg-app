@@ -1,0 +1,14 @@
+# -------------------------------------------------------------------
+# 🔭 Dockerfile.otelcol — OpenTelemetry Collector
+# -------------------------------------------------------------------
+
+# Base OTEL Collector image
+FROM otel/opentelemetry-collector:0.135.0
+
+# Copy your existing collector config into the image.
+# NOTE: build context in compose is "..", so "infra/..." is correct here.
+COPY infra/otel-collector-config.yaml /etc/otel-collector-config.yaml
+
+# Use the base image entrypoint (otelcol) and pass config via CMD,
+# matching what you had in docker-compose before.
+CMD ["--config=/etc/otel-collector-config.yaml"]

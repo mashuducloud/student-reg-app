@@ -1,6 +1,7 @@
 ---
 server:
   http_listen_port: 3200
+  log_level: info
 
 distributor:
   receivers:
@@ -11,17 +12,36 @@ distributor:
         http:
           endpoint: 0.0.0.0:4318
 
-ingester:
-  trace_idle_period: 10s
-  max_block_bytes: 1_000_000
-  max_block_duration: 5m
-
-compactor:
-  compaction:
-    block_retention: 1h
-
 storage:
   trace:
     backend: local
+    wal:
+      path: /tmp/tempo/wal
     local:
-      path: /tmp/tempo/traces
+      path: /tmp/tempo/blocks
+
+# ✅ Metrics generator for span/service metrics (NO overrides, NO localblocks)
+metrics_generator:
+  storage:
+    path: /tmp/tempo/metrics-generator
+
+  processor:
+    service_graphs:
+      dimensions:
+        - service.name
+
+    span_metrics:
+      dimensions:
+        - service.name
+        - span.name
+        - span.status_code
+
+compactor:
+  compaction:
+    compaction_window: 1h
+    block_retention: 12h
+    compacted_block_retention: 10m
+
+querier: {}
+
+query_frontend: {}

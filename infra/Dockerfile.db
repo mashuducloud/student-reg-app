@@ -1,0 +1,18 @@
+# -------------------------------------------------------------------
+# 🐬 Dockerfile.db — MySQL Database Image for student-reg-app
+# -------------------------------------------------------------------
+
+# Base: official MySQL 8.0 image
+FROM mysql:8.0
+
+# -------------------------------------------------------------------
+# ❌ Remove automatic schema initialization
+# We no longer copy schema.sql into /docker-entrypoint-initdb.d
+# because Flyway manages all schema/migrations now.
+# -------------------------------------------------------------------
+# COPY database/schema.sql /docker-entrypoint-initdb.d/schema.sql
+
+# -------------------------------------------------------------------
+# ✅ Expose Default MySQL Port
+# -------------------------------------------------------------------
+EXPOSE 3306

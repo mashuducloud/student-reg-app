@@ -1,0 +1,12 @@
+# Dockerfile.prometheus — custom Prometheus image for student-reg-app
+FROM prom/prometheus:v3.5.0
+
+# Copy your Prometheus configuration into the image
+# (docker-compose uses context: .., so this path is correct)
+COPY infra/prometheus.yml /etc/prometheus/prometheus.yml
+
+# Default Prometheus port
+EXPOSE 9090
+
+# Use the base entrypoint (/bin/prometheus) and only override arguments
+CMD ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--web.enable-lifecycle"]
