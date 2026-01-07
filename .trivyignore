@@ -1,9 +1,38 @@
-# OS package in upstream base layer
-CVE-2025-6965
+# .trivyignore
+# Purpose: temporary suppressions for CI while upstream/base images roll forward.
+# Format: one vulnerability ID per line, with optional comments.
 
-# mysqlsh bundled python deps
-CVE-2025-47273
+# ---------------------------
+# mysql-db:latest (mysql:8.0.43)
+# ---------------------------
+# Oracle Linux sqlite-libs fix lands in a newer Oracle 9.7 base layer than shipped here.
+CVE-2025-6965  # expires: 2026-03-01  # mysql-db: sqlite-libs 3.34.1-8.el9_6 -> 3.34.1-9.el9_7
 
-# gosu binary built with older Go stdlib
-CVE-2025-58183
-CVE-2025-61729
+# setuptools fix requires upstream image to update bundled python deps in mysqlsh layer.
+CVE-2025-47273 # expires: 2026-03-01  # mysql-db: setuptools 73.0.1 -> 78.1.1
+
+# gosu is shipped in the upstream image; upgrade comes from upstream rebuild.
+CVE-2025-58183 # expires: 2026-03-01  # mysql-db: gosu golang stdlib v1.24.6 -> 1.24.8/1.25.2
+CVE-2025-61729 # expires: 2026-03-01  # mysql-db: gosu crypto/x509 v1.24.6 -> 1.24.11/1.25.5
+
+
+# ---------------------------------
+# my-flyway-migrations:latest (alpine 3.20.3)
+# ---------------------------------
+# These are OS package HIGHs where Trivy reports a fixed version is available; fix by bumping Alpine
+# patch level + apk upgrade during image build.
+CVE-2025-68973 # expires: 2026-02-15  # flyway: gnupg 2.4.5-r0 -> 2.4.9-r0
+CVE-2024-12797 # expires: 2026-02-15  # flyway: openssl/libcrypto/libssl 3.3.2-r1 -> 3.3.3-r0
+CVE-2024-8176  # expires: 2026-02-15  # flyway: libexpat 2.6.4-r0 -> 2.7.0-r0
+CVE-2025-64720 # expires: 2026-02-15  # flyway: libpng 1.6.44-r0 -> 1.6.53-r0
+CVE-2025-65018 # expires: 2026-02-15  # flyway: libpng 1.6.44-r0 -> 1.6.53-r0
+CVE-2025-66293 # expires: 2026-02-15  # flyway: libpng 1.6.44-r0 -> 1.6.53-r0
+CVE-2025-26519 # expires: 2026-02-15  # flyway: musl 1.2.5-r0 -> 1.2.5-r1
+CVE-2025-29087 # expires: 2026-02-15  # flyway: sqlite-libs 3.45.3-r1 -> 3.45.3-r2
+
+# Java/JDBC HIGHs bundled into the flyway image; fix by bumping jar versions.
+CVE-2024-49194 # expires: 2026-02-15  # flyway: databricks-jdbc 2.6.38 -> 2.6.40
+CVE-2025-59250 # expires: 2026-02-15  # flyway: mssql-jdbc 12.6.3.jre11 -> 12.6.5.jre11+ (or newer listed)
+CVE-2025-55163 # expires: 2026-02-15  # flyway: grpc-netty-shaded 1.68.0 -> 1.75.0
+CVE-2025-24970 # expires: 2026-02-15  # flyway: netty-handler 4.1.94.Final -> 4.1.118.Final
+CVE-2025-24789 # expires: 2026-02-15  # flyway: snowflake-jdbc 3.20.0 -> 3.22.0
