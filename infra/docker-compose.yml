@@ -55,30 +55,25 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.flyway
-    image: my-flyway-migrations
+    image: flyway-migrations
     container_name: flyway-migrations
     depends_on:
       mysql-db:
         condition: service_healthy
-
     env_file:
       - ./.env
-
     environment:
       FLYWAY_URL: jdbc:mysql://${DB_HOST:-mysql-db}:${DB_PORT:-3306}/${DB_NAME:-student_registration_db}?allowPublicKeyRetrieval=true&useSSL=false
       FLYWAY_USER: ${DB_USER}
       FLYWAY_PASSWORD: ${DB_PASSWORD}
       FLYWAY_CONNECT_RETRIES: 60
       FLYWAY_LOCATIONS: filesystem:/flyway/sql
-
-    # ✅ Healthcheck: becomes healthy once migrations have run
     healthcheck:
       test: ["CMD-SHELL", "[ -f /flyway/.migrated ]"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
-
     networks:
       - ${DOCKER_NETWORK}
 

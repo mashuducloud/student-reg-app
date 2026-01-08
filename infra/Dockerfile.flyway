@@ -1,12 +1,9 @@
-# infra/Dockerfile.flyway
 FROM flyway/flyway:10-alpine
 
-# Only NON-sensitive defaults
 ENV FLYWAY_LOCATIONS=filesystem:/flyway/sql \
     FLYWAY_CONNECT_RETRIES=60
 
-# Copy only the migration folder
 COPY database/migration /flyway/sql
 
-# Run migrations once, mark a flag file, then stay alive
-CMD ["sh", "-c", "flyway migrate && touch /flyway/.migrated && tail -f /dev/null"]
+ENTRYPOINT ["sh", "-c"]
+CMD ["flyway migrate && touch /flyway/.migrated && tail -f /dev/null"]
