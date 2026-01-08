@@ -234,13 +234,13 @@ jobs:
 
       - name: "Run backend tests + coverage (profile test)"
         run: |
-          mkdir -p coverage
+          mkdir -p coverage/htmlcov
           docker compose --env-file infra/.env -f infra/docker-compose.yml --profile test run --rm \
             -v "$PWD/coverage:/app/coverage" \
             tests \
             pytest --cov=. \
-              --cov-report=xml:coverage/coverage.xml \
-              --cov-report=html:coverage/htmlcov \
+              --cov-report=xml:/app/coverage/coverage.xml \
+              --cov-report=html:/app/coverage/htmlcov \
               -v
 
       - name: "Upload Test & Coverage Artifacts"
