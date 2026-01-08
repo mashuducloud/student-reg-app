@@ -238,6 +238,7 @@ jobs:
           mkdir -p coverage/htmlcov
           docker compose --env-file infra/.env -f infra/docker-compose.yml --profile test run --rm \
             --user "$(id -u):$(id -g)" \
+            -e COVERAGE_FILE=/app/coverage/.coverage \
             -v "$PWD/coverage:/app/coverage" \
             tests \
             pytest --cov=. \
