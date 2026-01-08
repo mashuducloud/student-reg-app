@@ -79,10 +79,76 @@ jobs:
       - name: "Comprehensive YAML Lint"
         run: yamllint -c .yamllint.yml .
 
+  # --------------------------------------------------------------------------
+  # DEV FLOW: After quality checks on dev push, auto-open PR dev → main
+  # (This is your requested sequence: Quality Checks → Auto PR)
+  # --------------------------------------------------------------------------
+  open-pr-dev-to-main:
+    name: "CI: Auto PR dev → main"
+    runs-on: ubuntu-latest
+    needs: [quality-checks]
+    if: success() && github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PR_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+
+            // Force base to main (as requested)
+            const base = 'main';
+            const head = 'dev';
+
+            // If repo default isn't main, still keep base fixed to main:
+            // Ensure head != base
+            if (base === head) return;
+
+            // If an open PR already exists, do nothing
+            const { data: prs } = await github.rest.pulls.list({
+              owner, repo,
+              state: 'open',
+              base,
+              head: `${owner}:${head}`,
+            });
+            if (prs.length > 0) return;
+
+            // Only open PR if dev is ahead of main
+            try {
+              const cmp = await github.request(
+                'GET /repos/{owner}/{repo}/compare/{base}...{head}',
+                { owner, repo, base, head }
+              );
+              if ((cmp.data.ahead_by || 0) === 0) return;
+            } catch (e) {
+              return;
+            }
+
+            await github.rest.pulls.create({
+              owner, repo,
+              head, base,
+              title: `Auto PR: ${head} → ${base}`,
+              body: 'Opened by CI after Quality Checks.',
+            });
+
+  # --------------------------------------------------------------------------
+  # MERGE / MAIN FLOW: On PR to main/master OR push to main/master,
+  # run: Quality Checks → Build/Scan/Artifact → Full stack tests.
+  # --------------------------------------------------------------------------
   build-scan-and-artifacts:
     name: "CI: Build ALL Images, Scan & Artifact"
     runs-on: ubuntu-latest
     needs: [quality-checks]
+    if: >-
+      success() && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && (
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master'
+        ))
+      )
     steps:
       - uses: actions/checkout@v4
 
@@ -168,6 +234,14 @@ jobs:
     name: "CI: Bring up FULL stack + run tests"
     runs-on: ubuntu-latest
     needs: [build-scan-and-artifacts]
+    if: >-
+      success() && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && (
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master'
+        ))
+      )
     steps:
       - uses: actions/checkout@v4
 
@@ -257,35 +331,6 @@ jobs:
       - name: "Tear down services"
         if: always()
         run: docker compose --env-file infra/.env -f infra/docker-compose.yml down -v
-
-  open-pr-when-ahead:
-    name: "CI: Auto PR dev → default"
-    runs-on: ubuntu-latest
-    needs: [infra-smoke-and-tests]
-    if: success() && github.ref == 'refs/heads/dev' && github.event_name == 'push'
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PR_TOKEN || github.token }}
-          script: |
-            const { owner, repo } = context.repo;
-            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
-            const base = repoData.default_branch;
-            const head = 'dev';
-            if (base === head) return;
-
-            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', base, head: `${owner}:${head}` });
-            if (prs.length > 0) return;
-
-            try {
-              const cmp = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', { owner, repo, base, head });
-              if ((cmp.data.ahead_by || 0) === 0) return;
-            } catch (e) { return; }
-
-            await github.rest.pulls.create({ owner, repo, head, base, title: `Auto PR: ${head} → ${base}`, body: 'Opened by CI.' });
 
   # ----------------------------------------------------------------------------
   # STAGE 2: Continuous Deployment (CD)
@@ -436,7 +481,7 @@ jobs:
   publish-prod:
     name: "CD: Deploy to Production"
     runs-on: ubuntu-latest
-    needs: [infra-smoke-and-tests]
+    needs: [publish-preprod]
     if: >-
       success() && (
         github.ref == 'refs/heads/main' ||
