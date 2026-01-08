@@ -1,0 +1,18 @@
+# -------------------------------------------------------------------
+# 🐬 Dockerfile.db — MySQL Database Image for student-reg-app
+# -------------------------------------------------------------------
+
+# Patch-pinned MySQL base (security + reproducibility)
+FROM mysql:8.0.43
+
+
+# -------------------------------------------------------------------
+# Flyway manages ALL schema/migrations.
+# Do NOT auto-run init SQL from /docker-entrypoint-initdb.d
+# -------------------------------------------------------------------
+# (Intentionally no COPY to /docker-entrypoint-initdb.d)
+
+# -------------------------------------------------------------------
+# Expose MySQL port (documentation; Compose handles publishing)
+# -------------------------------------------------------------------
+EXPOSE 3306

@@ -1,0 +1,42 @@
+---
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /run/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Guaranteed tail of all container JSON logs
+  - job_name: docker-json
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: docker-json
+          # tail ALL docker json logs
+          __path__: /var/lib/docker/containers/*/*-json.log
+    pipeline_stages:
+      - docker: {}
+
+  # (Optional) keep your docker_sd job; it’s fine to have both
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    pipeline_stages:
+      - docker: {}
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: compose_service
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: compose_project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_container_number']
+        target_label: compose_number
+      - source_labels: ['__meta_docker_container_log_path']
+        target_label: __path__

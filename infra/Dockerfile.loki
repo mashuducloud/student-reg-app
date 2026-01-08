@@ -1,0 +1,9 @@
+# infra/Dockerfile.loki
+FROM grafana/loki:2.9.8
+
+# No COPY: config is provided via volume in docker-compose
+# docker-compose.yml mounts:
+#   ./loki-config.yaml:/etc/loki/config.yaml:ro
+
+# Optional (but harmless): default command (also set in compose)
+CMD ["-config.file=/etc/loki/config.yaml"]

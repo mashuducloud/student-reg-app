@@ -1,0 +1,9 @@
+FROM flyway/flyway:10-alpine
+
+ENV FLYWAY_LOCATIONS=filesystem:/flyway/sql \
+    FLYWAY_CONNECT_RETRIES=60
+
+COPY database/migration /flyway/sql
+
+ENTRYPOINT ["sh", "-c"]
+CMD ["flyway migrate && touch /flyway/.migrated && tail -f /dev/null"]

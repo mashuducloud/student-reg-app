@@ -1,4 +1,48 @@
-# Backend Dockerfile for Flask app
+########################################
+# Stage 1: Builder image
+########################################
+FROM python:3.11-slim AS builder
+
+# System deps for building wheels (if needed)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_HOME=/app \
+    VIRTUAL_ENV=/opt/venv
+
+WORKDIR ${APP_HOME}
+
+# Create a virtualenv for app deps
+RUN python -m venv ${VIRTUAL_ENV}
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+# Build-time flag: whether to install dev/test dependencies
+# Use: --build-arg INSTALL_DEV=true for tests / dev images
+ARG INSTALL_DEV=false
+
+# Install Python deps into the venv
+# Expect both files to exist in backend/:
+#   - requirements.txt        -> prod deps only
+#   - requirements-dev.txt    -> includes prod deps + dev/test deps
+COPY backend/requirements.txt backend/requirements-dev.txt ./
+
+RUN pip install --upgrade pip \
+ && if [ "$INSTALL_DEV" = "true" ]; then \
+        echo "📦 Installing dev/test dependencies from requirements-dev.txt"; \
+        pip install --no-cache-dir -r requirements-dev.txt; \
+    else \
+        echo "📦 Installing production dependencies from requirements.txt"; \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
+
+
+########################################
+# Stage 2: Runtime image
+########################################
 FROM python:3.11-slim
 
 # System deps for healthchecks & TLS
@@ -10,23 +54,39 @@ RUN apt-get update \
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    APP_HOME=/app
+    APP_HOME=/app \
+    VIRTUAL_ENV=/opt/venv
+
+# Activate venv in PATH
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
 WORKDIR ${APP_HOME}
 
-# Install Python deps
-COPY backend/requirements.txt .
-RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+# Copy the pre-built venv from builder stage (with either prod or dev deps)
+COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 
-# App source
+# Copy application source code
 COPY backend/ .
 
-# Optional: in-image healthcheck (compose can override if you already have one)
+# Create non-root user and own the app dir
+RUN groupadd --system appgroup \
+ && useradd --system --create-home --gid appgroup appuser \
+ && chown -R appuser:appgroup ${APP_HOME}
+
+# Switch to non-root user
+USER appuser
+
+# Optional: in-image healthcheck (also mirrored in docker-compose)
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=8 \
   CMD curl -fsS http://127.0.0.1:5000/health || exit 1
 
 # App port
 EXPOSE 5000
 
-# Start (same as you had)
-CMD ["python", "main.py"]
+# Gunicorn runtime config via env (with sensible defaults)
+ENV GUNICORN_WORKERS=1 \
+    GUNICORN_TIMEOUT=30
+
+# Use FLASK_HOST / FLASK_PORT if set in env, otherwise default to 0.0.0.0:5000
+# Wrapped with `opentelemetry-instrument` so traces/logs go to OTEL collector
+CMD ["sh", "-c", "opentelemetry-instrument gunicorn -b ${FLASK_HOST:-0.0.0.0}:${FLASK_PORT:-5000} -w ${GUNICORN_WORKERS} --timeout ${GUNICORN_TIMEOUT} --access-logfile=- --error-logfile=- main:app"]

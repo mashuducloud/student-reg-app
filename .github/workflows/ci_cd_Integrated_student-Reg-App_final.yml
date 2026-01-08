@@ -27,16 +27,19 @@ env:
   PYTHON_VERSION: "3.11"
   AWS_REGION: us-east-1
   ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
-  ECR_PUBLIC_ALIAS: mashkenneth
-  BACKEND_DOCKERFILE: infra/Dockerfile.backend
-  FRONTEND_DOCKERFILE: infra/Dockerfile.frontend
-  IMAGE_BACKEND_LOCAL: student-backend:ci
-  IMAGE_FRONTEND_LOCAL: student-frontend:ci
   ECR_PURGE: ${{ inputs.ECR_PURGE || secrets.ECR_PURGE || 'true' }}
-  PROMETHEUS_VERSION: "v2.54.1"
-  GRAFANA_VERSION: "11.2.0"
-  OTELCOL_VERSION: "0.108.0"
-  TEMPO_VERSION: "2.5.0"
+
+  # Images that get pushed to ECR (runtime images only)
+  PRIVATE_IMAGES: "student-app mysql-db flyway-migrations student-frontend"
+
+  # Images needed in CI (includes test image so it can be scanned & loaded)
+  CI_IMAGES: "student-app mysql-db flyway-migrations student-frontend student-api-tests"
+
+  # Observability images (public ECR)
+  PUBLIC_OBS_IMAGES: "infra-otel-collector infra-tempo infra-prometheus infra-grafana infra-loki infra-promtail"
+
+  # Trivy cache dir (for CI speed + reliability)
+  TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
 
 jobs:
   # ----------------------------------------------------------------------------
@@ -76,79 +79,105 @@ jobs:
       - name: "Comprehensive YAML Lint"
         run: yamllint -c .yamllint.yml .
 
-  build-and-scan:
-    name: "CI: Build, Scan & Artifacts"
+  build-scan-and-artifacts:
+    name: "CI: Build ALL Images, Scan & Artifact"
     runs-on: ubuntu-latest
     needs: [quality-checks]
     steps:
       - uses: actions/checkout@v4
 
+      # IMPORTANT: ensure built images are available locally for docker/trivy.
       - uses: docker/setup-buildx-action@v3
-
-      - name: "Build backend image"
-        uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ${{ env.BACKEND_DOCKERFILE }}
-          tags: ${{ env.IMAGE_BACKEND_LOCAL }}
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          driver: docker
 
-      - name: "Build frontend image"
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ env.FRONTEND_DOCKERFILE }}
-          tags: ${{ env.IMAGE_FRONTEND_LOCAL }}
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: "Trivy Scan — BACKEND"
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_BACKEND_LOCAL }}
-          severity: "HIGH,CRITICAL"
-          ignore-unfixed: true
-          exit-code: 1
-
-      - name: "Trivy Scan — FRONTEND"
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_FRONTEND_LOCAL }}
-          severity: "HIGH,CRITICAL"
-          ignore-unfixed: true
-          exit-code: 1
-
-      - name: "Save Docker images for subsequent jobs"
+      - name: "Prepare .env for docker-compose (CI)"
+        env:
+          DB_SECRET: ${{ secrets.DB_SECRET }}
         run: |
-          docker save ${{ env.IMAGE_BACKEND_LOCAL }} | gzip > backend-image.tar.gz
-          docker save ${{ env.IMAGE_FRONTEND_LOCAL }} | gzip > frontend-image.tar.gz
+          set -e
+          mkdir -p infra
+          if [ -n "${DB_SECRET:-}" ]; then
+            printf "%s\n" "${DB_SECRET}" > infra/.env
+          else
+            echo "::error::DB_SECRET is not set."
+            exit 1
+          fi
+          # Ensure network var exists for compose interpolation
+          if ! grep -q '^DOCKER_NETWORK=' infra/.env; then
+            echo "DOCKER_NETWORK=observability-network" >> infra/.env
+          fi
 
-      - name: "Upload image artifacts"
+      - name: "Build ALL docker-compose images (incl test profile)"
+        run: |
+          docker compose --env-file infra/.env -f infra/docker-compose.yml --profile test build
+
+      - name: "Install Trivy"
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -y
+          sudo apt-get install -y trivy
+          trivy --version
+
+      # Cache Trivy DB + artifact cache to speed up scans and reduce flaky downloads
+      - name: "Cache Trivy DB"
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TRIVY_CACHE_DIR }}
+          key: trivy-${{ runner.os }}-${{ hashFiles('.trivyignore') }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: "Trivy Scan — ALL images (vuln only, uses .trivyignore)"
+        env:
+          TRIVY_CACHE_DIR: ${{ env.TRIVY_CACHE_DIR }}
+        run: |
+          set -e
+          mkdir -p "${TRIVY_CACHE_DIR}"
+          IMAGES="${{ env.CI_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }}"
+          for img in $IMAGES; do
+            echo "Scanning ${img}:latest"
+            trivy image \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --ignorefile "${GITHUB_WORKSPACE}/.trivyignore" \
+              --cache-dir "${TRIVY_CACHE_DIR}" \
+              "${img}:latest"
+          done
+
+      - name: "Save ALL images as artifact"
+        run: |
+          set -e
+          mkdir -p image_out
+          docker save ${{ env.CI_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }} | gzip > image_out/all-images.tar.gz
+
+      - name: "Upload image artifact"
         uses: actions/upload-artifact@v4
         with:
           name: image-artifacts
-          path: |
-            backend-image.tar.gz
-            frontend-image.tar.gz
+          path: image_out/all-images.tar.gz
           retention-days: 7
 
   infra-smoke-and-tests:
-    name: "CI: Integration Tests & Reports"
+    name: "CI: Bring up FULL stack + run tests"
     runs-on: ubuntu-latest
-    needs: [build-and-scan]
+    needs: [build-scan-and-artifacts]
     steps:
       - uses: actions/checkout@v4
 
-      - name: "Download image artifacts"
+      - name: "Download image artifact"
         uses: actions/download-artifact@v4
         with:
           name: image-artifacts
 
       - name: "Load Docker images"
-        run: gzip -dc backend-image.tar.gz | docker load && gzip -dc frontend-image.tar.gz | docker load
+        run: gzip -dc all-images.tar.gz | docker load
 
       - name: "Prepare .env for docker-compose"
         env:
@@ -162,37 +191,59 @@ jobs:
             echo "::error::DB_SECRET is not set."
             exit 1
           fi
-
-      - name: "Start services using Docker Compose"
-        run: docker compose --env-file infra/.env -f infra/docker-compose.yml up -d
-
-      - name: "Prepare helper scripts"
-        run: |
-          set -e
-          shopt -s nullglob
-          for f in .github/scripts/*.sh; do
-            sed -i 's/\r$//' "$f"
-            chmod +x "$f"
-          done
-
-      - name: "Wait for services and run health checks"
-        run: |
-          if [ -f ./.github/scripts/health-check.sh ]; then
-            bash ./.github/scripts/health-check.sh
-          else
-            echo "health-check.sh not found, sleeping for 30s as a fallback..."
-            sleep 30
+          if ! grep -q '^DOCKER_NETWORK=' infra/.env; then
+            echo "DOCKER_NETWORK=observability-network" >> infra/.env
           fi
 
-      - name: "Run backend tests + coverage"
+      - name: "Start ALL services (no rebuild)"
         run: |
-          mkdir -p coverage
-          docker compose -f infra/docker-compose.yml run --rm \
+          docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --no-build
+
+      - name: "Wait for Flyway + app health"
+        run: |
+          set -e
+          echo "Waiting for Flyway migrations..."
+          for i in $(seq 1 90); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' flyway-migrations 2>/dev/null || echo unknown)"
+            if [ "$status" = "healthy" ]; then
+              echo "Flyway healthy."
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              echo "::error::Flyway unhealthy."
+              docker logs flyway-migrations || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Waiting for app health..."
+          for i in $(seq 1 90); do
+            st="$(docker inspect -f '{{.State.Health.Status}}' student-app 2>/dev/null || echo unknown)"
+            if [ "$st" = "healthy" ]; then
+              echo "App healthy."
+              break
+            fi
+            if [ "$st" = "unhealthy" ]; then
+              echo "::error::App unhealthy."
+              docker logs student-app || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: "Run backend tests + coverage (profile test)"
+        run: |
+          set -e
+          mkdir -p coverage/htmlcov
+          docker compose --env-file infra/.env -f infra/docker-compose.yml --profile test run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e COVERAGE_FILE=/app/coverage/.coverage \
             -v "$PWD/coverage:/app/coverage" \
             tests \
             pytest --cov=. \
-              --cov-report=xml:coverage/coverage.xml \
-              --cov-report=html:coverage/htmlcov \
+              --cov-report=xml:/app/coverage/coverage.xml \
+              --cov-report=html:/app/coverage/htmlcov \
               -v
 
       - name: "Upload Test & Coverage Artifacts"
@@ -205,7 +256,7 @@ jobs:
 
       - name: "Tear down services"
         if: always()
-        run: docker compose -f infra/docker-compose.yml down -v
+        run: docker compose --env-file infra/.env -f infra/docker-compose.yml down -v
 
   open-pr-when-ahead:
     name: "CI: Auto PR dev → default"
@@ -221,47 +272,20 @@ jobs:
           github-token: ${{ secrets.PR_TOKEN || github.token }}
           script: |
             const { owner, repo } = context.repo;
-            const { data: repoData } = await github.request(
-              'GET /repos/{owner}/{repo}',
-              { owner, repo }
-            );
+            const { data: repoData } = await github.request('GET /repos/{owner}/{repo}', { owner, repo });
             const base = repoData.default_branch;
             const head = 'dev';
             if (base === head) return;
 
-            try {
-              const cmp = await github.request(
-                'GET /repos/{owner}/{repo}/compare/{base}...{head}',
-                { owner, repo, base, head }
-              );
-              const ahead_by = cmp.data.ahead_by || 0;
-              if (ahead_by === 0) {
-                core.info('dev is not ahead; skipping PR creation.');
-                return;
-              }
-            } catch (e) {
-              core.warning(`Compare failed (possibly unrelated histories): ${e.message}`);
-              return;
-            }
-
-            const { data: prs } = await github.rest.pulls.list({
-              owner, repo, state: 'open', base,
-              head: `${owner}:${head}`
-            });
-            if (prs.length > 0) {
-              core.info('PR already exists.');
-              return;
-            }
+            const { data: prs } = await github.rest.pulls.list({ owner, repo, state: 'open', base, head: `${owner}:${head}` });
+            if (prs.length > 0) return;
 
             try {
-              await github.rest.pulls.create({
-                owner, repo, head, base,
-                title: `Auto PR: ${head} → ${base}`,
-                body: 'Opened by CI.'
-              });
-            } catch (e) {
-              core.warning(`Could not create PR (likely permissions): ${e.message}`);
-            }
+              const cmp = await github.request('GET /repos/{owner}/{repo}/compare/{base}...{head}', { owner, repo, base, head });
+              if ((cmp.data.ahead_by || 0) === 0) return;
+            } catch (e) { return; }
+
+            await github.rest.pulls.create({ owner, repo, head, base, title: `Auto PR: ${head} → ${base}`, body: 'Opened by CI.' });
 
   # ----------------------------------------------------------------------------
   # STAGE 2: Continuous Deployment (CD)
@@ -302,9 +326,6 @@ jobs:
               pr.head.ref === 'dev'
             );
             core.setOutput('ok', ok ? 'true' : 'false');
-            if (!ok) {
-              core.info('No merged PR from dev → main/master for this commit; skip pre-prod deploy.');
-            }
 
       - name: "Configure AWS Credentials"
         if: ${{ steps.gate.outputs.ok == 'true' }}
@@ -316,11 +337,11 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: "Sanity check caller identity"
-        if: ${{steps.gate.outputs.ok == 'true'}}
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         run: aws sts get-caller-identity
 
       - name: "(Dangerous) Delete & recreate ECR Private repos"
-        if: ${{steps.gate.outputs.ok == 'true' && env.ECR_PURGE == 'true'}}
+        if: ${{ steps.gate.outputs.ok == 'true' && env.ECR_PURGE == 'true' }}
         run: |
           for repo in "${APP_REPO}" "${SIG_REPO}"; do
             if aws ecr describe-repositories --repository-names "${repo}" >/dev/null 2>&1; then
@@ -329,28 +350,18 @@ jobs:
             aws ecr create-repository --repository-name "${repo}"
           done
 
-      - name: "(Dangerous) Delete & recreate ECR Public repo"
-        if: ${{steps.gate.outputs.ok == 'true' && env.ECR_PURGE == 'true'}}
-        run: |
-          if aws ecr-public describe-repositories \
-            --repository-names "${{ env.OBS_REPO }}" >/dev/null 2>&1; then
-            aws ecr-public delete-repository \
-              --repository-name "${{ env.OBS_REPO }}" --force
-          fi
-          aws ecr-public create-repository --repository-name "${{ env.OBS_REPO }}"
-
-      - name: "Download image artifacts"
-        if: ${{steps.gate.outputs.ok == 'true'}}
+      - name: "Download image artifact"
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: image-artifacts
 
       - name: "Load Docker images"
-        if: ${{steps.gate.outputs.ok == 'true'}}
-        run: gzip -dc backend-image.tar.gz | docker load && gzip -dc frontend-image.tar.gz | docker load
+        if: ${{ steps.gate.outputs.ok == 'true' }}
+        run: gzip -dc all-images.tar.gz | docker load
 
       - name: "Login to Amazon ECR (Private and Public)"
-        if: ${{steps.gate.outputs.ok == 'true'}}
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         run: |
           aws ecr get-login-password --region ${{ env.AWS_REGION }} \
           | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
@@ -358,7 +369,7 @@ jobs:
           | docker login --username AWS --password-stdin public.ecr.aws
 
       - name: "Ensure Private ECR repos exist (preprod)"
-        if: ${{steps.gate.outputs.ok == 'true'}}
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         run: |
           set -e
           for repo in "${APP_REPO}" "${SIG_REPO}"; do
@@ -366,8 +377,8 @@ jobs:
             || aws ecr create-repository --repository-name "$repo"
           done
 
-      - name: "Detect ECR Public alias + ensure repo (preprod)"
-        if: ${{steps.gate.outputs.ok == 'true'}}
+      - name: "Detect ECR Public alias (preprod)"
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         id: ecrpub_pre
         env:
           AWS_REGION: us-east-1
@@ -383,94 +394,44 @@ jobs:
           fi
           echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
 
-          aws ecr-public get-login-password --region "$AWS_REGION" \
-          | docker login --username AWS --password-stdin public.ecr.aws
-
-          aws ecr-public describe-repositories \
-            --region "$AWS_REGION" \
-            --repository-names "${{ env.OBS_REPO }}" >/dev/null 2>&1 \
-          || aws ecr-public create-repository \
-               --region "$AWS_REGION" \
-               --repository-name "${{ env.OBS_REPO }}"
-
-      - name: "Show detected ECR Public alias (preprod)"
-        if: ${{ steps.gate.outputs.ok == 'true' }}"
-
-        run: |
-          echo "Detected alias (output): ${{ steps.ecrpub_pre.outputs.alias }}"
-          aws ecr-public describe-registries --region us-east-1 \
-            --query "registries[].aliases[].name | [0]" --output text
-
-      - name: "Push App Images to Private ECR (preprod)"
+      - name: "Push PRIVATE images to Private ECR (preprod)"
         if: ${{ steps.gate.outputs.ok == 'true' }}
         env:
           SHA: ${{ github.sha }}
         run: |
           set -ex
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
-
-          echo "== Show local images (before tagging) =="
-          docker images --format '{{.Repository}}:{{.Tag}}' | sort | uniq | sed -n '1,200p'
-
-          docker tag "${IMAGE_BACKEND_LOCAL}"  "${IMAGE_DEST}:backend-${SHA::12}"
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_DEST}:frontend-${SHA::12}"
-
-          echo "== Show the ECR-tagged images we will push =="
-          docker images "${IMAGE_DEST}" --format '{{.Repository}}:{{.Tag}}'
-
-          echo "== Push each tag explicitly =="
-          docker push "${IMAGE_DEST}:backend-${SHA::12}"
-          docker push "${IMAGE_DEST}:frontend-${SHA::12}"
-
-          echo "== Verify images now exist in ECR (preprod) =="
-          aws ecr list-images --repository-name "${APP_REPO}" \
-            --query 'imageIds[].imageTag' --output text
+          for img in ${{ env.PRIVATE_IMAGES }}; do
+            docker tag "${img}:latest" "${IMAGE_DEST}:${img}-${SHA::12}"
+            docker push "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
       - name: "Install cosign"
         if: ${{ steps.gate.outputs.ok == 'true' }}
         uses: sigstore/cosign-installer@v3.6.0
 
-      - name: "Sign Private images"
+      - name: "Sign PRIVATE images"
         if: ${{ steps.gate.outputs.ok == 'true' }}
         env:
           SHA: ${{ github.sha }}
         run: |
           export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
-          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
-          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
+          for img in ${{ env.PRIVATE_IMAGES }}; do
+            cosign sign --yes "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
-      - name: "Push Observability Stack to Public ECR"
+      - name: "Push OBS images to Public ECR (preprod)"
         if: ${{ steps.gate.outputs.ok == 'true' }}
         env:
-          AWS_REGION: us-east-1
+          SHA: ${{ github.sha }}
         run: |
           set -ex
           REG="public.ecr.aws/${{ steps.ecrpub_pre.outputs.alias }}"
-
-          UPSTREAM_PROM="prom/prometheus:${{ env.PROMETHEUS_VERSION }}"
-          TARGET_PROM="${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker pull "$UPSTREAM_PROM"
-          docker tag "$UPSTREAM_PROM" "$TARGET_PROM"
-          docker push "$TARGET_PROM"
-
-          UPSTREAM_GRAF="grafana/grafana:${{ env.GRAFANA_VERSION }}"
-          TARGET_GRAF="${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker pull "$UPSTREAM_GRAF"
-          docker tag "$UPSTREAM_GRAF" "$TARGET_GRAF"
-          docker push "$TARGET_GRAF"
-
-          UPSTREAM_OTEL="otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}"
-          TARGET_OTEL="${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker pull "$UPSTREAM_OTEL"
-          docker tag "$UPSTREAM_OTEL" "$TARGET_OTEL"
-          docker push "$TARGET_OTEL"
-
-          UPSTREAM_TEMPO="grafana/tempo:${{ env.TEMPO_VERSION }}"
-          TARGET_TEMPO="${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker pull "$UPSTREAM_TEMPO"
-          docker tag "$UPSTREAM_TEMPO" "$TARGET_TEMPO"
-          docker push "$TARGET_TEMPO"
+          for img in ${{ env.PUBLIC_OBS_IMAGES }}; do
+            docker tag "${img}:latest" "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+            docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+          done
 
   publish-prod:
     name: "CD: Deploy to Production"
@@ -498,29 +459,13 @@ jobs:
       - name: "Sanity check caller identity"
         run: aws sts get-caller-identity
 
-      - name: "(Dangerous) Delete & recreate ECR Private repos"
-        if: env.ECR_PURGE == 'true'
-        run: |
-          for repo in "${APP_REPO}" "${SIG_REPO}"; do
-            aws ecr delete-repository --repository-name "${repo}" --force || true
-            aws ecr create-repository --repository-name "${repo}"
-          done
-
-      - name: "(Dangerous) Delete & recreate ECR Public repo"
-        if: env.ECR_PURGE == 'true'
-        run: |
-          aws ecr-public delete-repository \
-            --repository-name "${{ env.OBS_REPO }}" --force || true
-          aws ecr-public create-repository \
-            --repository-name "${{ env.OBS_REPO }}"
-
-      - name: "Download image artifacts"
+      - name: "Download image artifact"
         uses: actions/download-artifact@v4
         with:
           name: image-artifacts
 
       - name: "Load Docker images"
-        run: gzip -dc backend-image.tar.gz | docker load && gzip -dc frontend-image.tar.gz | docker load
+        run: gzip -dc all-images.tar.gz | docker load
 
       - name: "Login to Amazon ECR (Private and Public)"
         run: |
@@ -529,15 +474,7 @@ jobs:
           aws ecr-public get-login-password --region us-east-1 \
           | docker login --username AWS --password-stdin public.ecr.aws
 
-      - name: "Ensure Private ECR repos exist (prod)"
-        run: |
-          set -e
-          for repo in "${APP_REPO}" "${SIG_REPO}"; do
-            aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1 \
-            || aws ecr create-repository --repository-name "$repo"
-          done
-
-      - name: "Detect ECR Public alias + ensure repo (prod)"
+      - name: "Detect ECR Public alias (prod)"
         id: ecrpub_prod
         env:
           AWS_REGION: us-east-1
@@ -553,85 +490,37 @@ jobs:
           fi
           echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
 
-          aws ecr-public get-login-password --region "$AWS_REGION" \
-          | docker login --username AWS --password-stdin public.ecr.aws
-
-          aws ecr-public describe-repositories \
-            --region "$AWS_REGION" \
-            --repository-names "${{ env.OBS_REPO }}" >/dev/null 2>&1 \
-          || aws ecr-public create-repository \
-               --region "$AWS_REGION" \
-               --repository-name "${{ env.OBS_REPO }}"
-
-      - name: "Show detected ECR Public alias (prod)"
-        run: |
-          echo "Detected alias (output): ${{ steps.ecrpub_prod.outputs.alias }}"
-          aws ecr-public describe-registries --region us-east-1 \
-            --query "registries[].aliases[].name | [0]" --output text
-
-      - name: "Push App Images to Private ECR (prod)"
+      - name: "Push PRIVATE images to Private ECR (prod)"
         env:
           SHA: ${{ github.sha }}
         run: |
           set -ex
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
-
-          echo "== Show local images (before tagging) =="
-          docker images --format '{{.Repository}}:{{.Tag}}' | sort | uniq | sed -n '1,200p'
-
-          docker tag "${IMAGE_BACKEND_LOCAL}"  "${IMAGE_DEST}:backend-${SHA::12}"
-          docker tag "${IMAGE_FRONTEND_LOCAL}" "${IMAGE_DEST}:frontend-${SHA::12}"
-
-          echo "== Show the ECR-tagged images we will push =="
-          docker images "${IMAGE_DEST}" --format '{{.Repository}}:{{.Tag}}'
-
-          echo "== Push each tag explicitly =="
-          docker push "${IMAGE_DEST}:backend-${SHA::12}"
-          docker push "${IMAGE_DEST}:frontend-${SHA::12}"
-
-          echo "== Verify images now exist in ECR (prod) =="
-          aws ecr list-images --repository-name "${APP_REPO}" \
-            --query 'imageIds[].imageTag' --output text
+          for img in ${{ env.PRIVATE_IMAGES }}; do
+            docker tag "${img}:latest" "${IMAGE_DEST}:${img}-${SHA::12}"
+            docker push "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
       - name: "Install cosign"
         uses: sigstore/cosign-installer@v3.6.0
 
-      - name: "Sign Private images"
+      - name: "Sign PRIVATE images"
         env:
           SHA: ${{ github.sha }}
         run: |
           export COSIGN_REPOSITORY="${ECR_REGISTRY}/${SIG_REPO}"
           IMAGE_DEST="${ECR_REGISTRY}/${APP_REPO}"
-          cosign sign --yes "${IMAGE_DEST}:backend-${SHA::12}"
-          cosign sign --yes "${IMAGE_DEST}:frontend-${SHA::12}"
+          for img in ${{ env.PRIVATE_IMAGES }}; do
+            cosign sign --yes "${IMAGE_DEST}:${img}-${SHA::12}"
+          done
 
-      - name: "Push Observability Stack to Public ECR"
+      - name: "Push OBS images to Public ECR (prod)"
         env:
-          AWS_REGION: us-east-1
+          SHA: ${{ github.sha }}
         run: |
           set -ex
           REG="public.ecr.aws/${{ steps.ecrpub_prod.outputs.alias }}"
-
-          UPSTREAM_PROM="prom/prometheus:${{ env.PROMETHEUS_VERSION }}"
-          TARGET_PROM="${REG}/${{ env.OBS_REPO }}:prometheus-${{ env.PROMETHEUS_VERSION }}"
-          docker pull "$UPSTREAM_PROM"
-          docker tag "$UPSTREAM_PROM" "$TARGET_PROM"
-          docker push "$TARGET_PROM"
-
-          UPSTREAM_GRAF="grafana/grafana:${{ env.GRAFANA_VERSION }}"
-          TARGET_GRAF="${REG}/${{ env.OBS_REPO }}:grafana-${{ env.GRAFANA_VERSION }}"
-          docker pull "$UPSTREAM_GRAF"
-          docker tag "$UPSTREAM_GRAF" "$TARGET_GRAF"
-          docker push "$TARGET_GRAF"
-
-          UPSTREAM_OTEL="otel/opentelemetry-collector:${{ env.OTELCOL_VERSION }}"
-          TARGET_OTEL="${REG}/${{ env.OBS_REPO }}:otelcol-${{ env.OTELCOL_VERSION }}"
-          docker pull "$UPSTREAM_OTEL"
-          docker tag "$UPSTREAM_OTEL" "$TARGET_OTEL"
-          docker push "$TARGET_OTEL"
-
-          UPSTREAM_TEMPO="grafana/tempo:${{ env.TEMPO_VERSION }}"
-          TARGET_TEMPO="${REG}/${{ env.OBS_REPO }}:tempo-${{ env.TEMPO_VERSION }}"
-          docker pull "$UPSTREAM_TEMPO"
-          docker tag "$UPSTREAM_TEMPO" "$TARGET_TEMPO"
-          docker push "$TARGET_TEMPO"
+          for img in ${{ env.PUBLIC_OBS_IMAGES }}; do
+            docker tag "${img}:latest" "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+            docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
+          done

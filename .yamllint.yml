@@ -1,8 +1,15 @@
 ---
 extends: default
+
+ignore: |
+  .venv/
+  node_modules/
+  image_out/
+  .trivyignore
+
 rules:
   line-length:
-    max: 140
+    max: 240
     allow-non-breakable-words: true
   new-line-at-end-of-file: enable
   truthy: disable

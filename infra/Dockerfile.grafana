@@ -1,0 +1,12 @@
+# -------------------------------------------------------------------
+# 📊 Dockerfile.grafana — Grafana for student-reg-app
+# -------------------------------------------------------------------
+
+# Base: official Grafana image
+FROM grafana/grafana:12.2.0
+
+# We keep configuration and creds in docker-compose / env,
+# so this image stays minimal. No extra packages here.
+#
+# (If you later want to bake provisioning dashboards/datasources
+#  into the image, you can COPY them here.)
