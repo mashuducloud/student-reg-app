@@ -43,3 +43,10 @@ CVE-2025-24789 # expires: 2026-02-15  # flyway: snowflake-jdbc 3.20.0 -> 3.22.0
 # Trivy reports a fixed version exists in upstream collector builds.
 # expires: 2026-02-15  otelcol: github.com/expr-lang/expr v1.17.6 -> 1.17.7
 CVE-2025-68156
+
+# ---------------------------------
+# infra-tempo:latest (grafana/tempo)
+# ---------------------------------
+# Go stdlib vulnerabilities fixed only when Tempo is rebuilt upstream with newer Go.
+CVE-2025-22874 # expires: 2026-02-15  # tempo: go crypto/x509 v1.24.3 -> 1.24.4+
+CVE-2025-47907 # expires: 2026-02-15  # tempo: go database/sql v1.24.3 -> 1.24.6+
