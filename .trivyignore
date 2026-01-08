@@ -65,3 +65,25 @@ CVE-2024-34156
 # Expires: 2026-02-01
 # Fixed by otelcol rebuild using expr >= 1.17.7
 CVE-2025-68156
+
+# ---------------------------------
+# infra-promtail:latest (debian 11.9)
+# ---------------------------------
+# Base image (Debian) package fixes: resolved by upstream image refresh (apt upgrade / newer base)
+CVE-2022-1304  # expires: 2026-02-15  # debian: e2fsprogs/libext2fs2/libcom-err2/libss2/logsave 1.46.2-2 -> 1.46.2-2+deb11u1
+CVE-2024-33599 # expires: 2026-02-15  # debian: glibc (libc6/libc-bin) 2.31-13+deb11u9 -> 2.31-13+deb11u10
+CVE-2025-4802  # expires: 2026-02-15  # debian: glibc fix in 2.31-13+deb11u13
+CVE-2024-0553  # expires: 2026-02-15  # debian: gnutls 3.7.1-5+deb11u4 -> 3.7.1-5+deb11u5
+CVE-2024-0567  # expires: 2026-02-15  # debian: gnutls 3.7.1-5+deb11u4 -> 3.7.1-5+deb11u5
+CVE-2025-32988 # expires: 2026-02-15  # debian: gnutls -> 3.7.1-5+deb11u8
+CVE-2025-32990 # expires: 2026-02-15  # debian: gnutls -> 3.7.1-5+deb11u8 (or newer)
+CVE-2024-37371 # expires: 2026-02-15  # debian: krb5 libs 1.18.3-6+deb11u4 -> 1.18.3-6+deb11u5
+CVE-2024-37370 # expires: 2026-02-15  # debian: krb5 libs 1.18.3-6+deb11u4 -> 1.18.3-6+deb11u5
+CVE-2025-6020  # expires: 2026-02-15  # debian: linux-pam 1.4.0-9+deb11u1 -> 1.4.0-9+deb11u2
+CVE-2023-50387 # expires: 2026-02-15  # debian: bind9-related packages (via libudev1 deps) -> 247.3-7+deb11u6
+CVE-2023-50868 # expires: 2026-02-15  # debian: bind9-related packages (via libudev1 deps) -> 247.3-7+deb11u6
+CVE-2020-16156 # expires: 2026-02-15  # debian: perl-base 5.32.1-4+deb11u3 -> 5.32.1-4+deb11u4
+CVE-2023-31484 # expires: 2026-02-15  # debian: perl-base/CPAN.pm -> 5.32.1-4+deb11u4 (or newer)
+
+# promtail binary (moby/docker lib) — fixed by bumping promtail/loki image build that vendors newer docker
+CVE-2024-41110 # expires: 2026-02-15  # promtail: github.com/docker/docker v23.0.8 -> 23.0.15+ (or newer listed)
