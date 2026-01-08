@@ -234,8 +234,10 @@ jobs:
 
       - name: "Run backend tests + coverage (profile test)"
         run: |
+          set -e
           mkdir -p coverage/htmlcov
           docker compose --env-file infra/.env -f infra/docker-compose.yml --profile test run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "$PWD/coverage:/app/coverage" \
             tests \
             pytest --cov=. \
