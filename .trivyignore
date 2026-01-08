@@ -18,7 +18,7 @@ CVE-2025-58183
 CVE-2025-61729
 
 # =============================================================================
-# my-flyway-migrations:latest (alpine 3.20.x)
+# flyway-migrations:latest (alpine 3.20.x)
 # =============================================================================
 # Expires: 2026-02-15
 # Fixed by alpine patch bumps + jar updates in a future Flyway image

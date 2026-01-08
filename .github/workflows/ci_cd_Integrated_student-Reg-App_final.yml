@@ -29,8 +29,13 @@ env:
   ECR_REGISTRY: 724772092393.dkr.ecr.us-east-1.amazonaws.com
   ECR_PURGE: ${{ inputs.ECR_PURGE || secrets.ECR_PURGE || 'true' }}
 
-  # Image names from docker-compose.yml (these must match `image:` fields)
-  PRIVATE_IMAGES: "student-app mysql-db my-flyway-migrations student-frontend"
+  # Images that get pushed to ECR (runtime images only)
+  PRIVATE_IMAGES: "student-app mysql-db flyway-migrations student-frontend"
+
+  # Images needed in CI (includes test image so it can be scanned & loaded)
+  CI_IMAGES: "student-app mysql-db flyway-migrations student-frontend student-api-tests"
+
+  # Observability images (public ECR)
   PUBLIC_OBS_IMAGES: "infra-otel-collector infra-tempo infra-prometheus infra-grafana infra-loki infra-promtail"
 
   # Trivy cache dir (for CI speed + reliability)
@@ -133,7 +138,7 @@ jobs:
         run: |
           set -e
           mkdir -p "${TRIVY_CACHE_DIR}"
-          IMAGES="${{ env.PRIVATE_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }}"
+          IMAGES="${{ env.CI_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }}"
           for img in $IMAGES; do
             echo "Scanning ${img}:latest"
             trivy image \
@@ -150,7 +155,7 @@ jobs:
         run: |
           set -e
           mkdir -p image_out
-          docker save ${{ env.PRIVATE_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }} | gzip > image_out/all-images.tar.gz
+          docker save ${{ env.CI_IMAGES }} ${{ env.PUBLIC_OBS_IMAGES }} | gzip > image_out/all-images.tar.gz
 
       - name: "Upload image artifact"
         uses: actions/upload-artifact@v4
