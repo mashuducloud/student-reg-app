@@ -478,9 +478,13 @@ jobs:
             docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
           done
 
-           - uses: actions/checkout@v4
+      # (optional) only needed if you somehow don't have the repo files at this point
+      # you already checked out earlier in other jobs, but this job doesn't have checkout yet.
+      - uses: actions/checkout@v4
+        if: ${{ steps.gate.outputs.ok == 'true' }}
 
       - name: "Debug env injection"
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         env:
           RDS_ENDPOINT: ${{ secrets.PREPROD_RDS_ENDPOINT }}
           DB_NAME: ${{ secrets.DB_NAME }}
@@ -493,20 +497,22 @@ jobs:
           echo "DB_PASSWORD=${DB_PASSWORD:+SET}"
 
       - name: "Deploy to EC2 via SSM (Flyway -> Backend -> Frontend)"
+        if: ${{ steps.gate.outputs.ok == 'true' }}
         env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
           IMAGE_DEST: ${{ env.ECR_REGISTRY }}/${{ env.APP_REPO }}
+
           RDS_ENDPOINT: ${{ secrets.PREPROD_RDS_ENDPOINT }}
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "TAG=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
-          source "$GITHUB_ENV"
+          export TAG="${GITHUB_SHA::12}"
           ls -la infra/scripts
           chmod +x infra/scripts/deploy_preprod_ssm.sh
           ./infra/scripts/deploy_preprod_ssm.sh
-
 
   publish-prod:
     name: "CD: Deploy to Production"
