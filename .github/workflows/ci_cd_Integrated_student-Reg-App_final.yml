@@ -478,6 +478,25 @@ jobs:
             docker push "${REG}/${{ env.OBS_REPO }}:${img}-${SHA::12}"
           done
 
+      - name: "Deploy to EC2 via SSM (Flyway -> Backend -> Frontend)"
+        if: ${{ steps.gate.outputs.ok == 'true' }}
+        env:
+          SHA: ${{ github.sha }}
+          TAG: ${{ github.sha }}
+          IMAGE_DEST: ${{ env.ECR_REGISTRY }}/${{ env.APP_REPO }}
+
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ECR_REGISTRY: ${{ env.ECR_REGISTRY }}
+
+          RDS_ENDPOINT: ${{ secrets.PREPROD_RDS_ENDPOINT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -e
+          export TAG="${SHA::12}"
+          bash infra/scripts/deploy_preprod_ssm.sh
+
   publish-prod:
     name: "CD: Deploy to Production"
     runs-on: ubuntu-latest
