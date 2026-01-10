@@ -17,13 +17,17 @@ echo "Image dest: ${IMAGE_DEST}"
 send() {
   local target_name="$1"
   shift
-  local cmd="$1"
+  local cmd="$*"
+
+  # Turn the multi-line script into a JSON array: ["line1","line2",...]
+  local commands_json
+  commands_json="$(printf '%s\n' "$cmd" | jq -R . | jq -s .)"
 
   aws ssm send-command \
     --region "${AWS_REGION}" \
     --document-name "AWS-RunShellScript" \
     --targets "Key=tag:Name,Values=${target_name}" \
-    --parameters commands="$(printf '%s\n' "$cmd")" \
+    --parameters "{\"commands\": ${commands_json}}" \
     --comment "student-reg-app preprod deploy ${TAG}" \
     --output text \
     --query "Command.CommandId"
