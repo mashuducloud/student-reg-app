@@ -4,44 +4,58 @@ locals {
     set -euxo pipefail
 
     dnf update -y
-    dnf install -y docker
-    systemctl enable docker
-    systemctl start docker
 
-    systemctl enable amazon-ssm-agent || true
-    systemctl start amazon-ssm-agent || true
+    # Install Docker
+    dnf install -y docker
+    systemctl enable --now docker
+
+    # Install + start SSM Agent (AL2023 safe)
+    dnf install -y amazon-ssm-agent || true
+    systemctl enable --now amazon-ssm-agent || true
+
+    # Quick status log (useful for debugging)
+    systemctl status amazon-ssm-agent --no-pager || true
   EOF
 }
 
 resource "aws_instance" "frontend" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.default.ids[0]
+  subnet_id              = data.aws_subnets.public.ids[0]
   vpc_security_group_ids = [aws_security_group.frontend_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   user_data              = local.common_user_data
+  key_name               = var.key_name
 
-  tags = { Name = "${var.project}-${var.env}-frontend" }
+  tags = {
+    Name = "${var.project}-${var.env}-frontend"
+  }
 }
 
 resource "aws_instance" "backend" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.default.ids[0]
+  subnet_id              = data.aws_subnets.public.ids[0]
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   user_data              = local.common_user_data
+  key_name               = var.key_name
 
-  tags = { Name = "${var.project}-${var.env}-backend" }
+  tags = {
+    Name = "${var.project}-${var.env}-backend"
+  }
 }
 
 resource "aws_instance" "flyway" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.default.ids[0]
+  subnet_id              = data.aws_subnets.public.ids[0]
   vpc_security_group_ids = [aws_security_group.flyway_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
   user_data              = local.common_user_data
+  key_name               = var.key_name
 
-  tags = { Name = "${var.project}-${var.env}-flyway" }
+  tags = {
+    Name = "${var.project}-${var.env}-flyway"
+  }
 }

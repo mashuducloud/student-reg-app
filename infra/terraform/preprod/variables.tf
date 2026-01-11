@@ -48,3 +48,7 @@ variable "ssh_cidr" {
   type    = string
   default = "0.0.0.0/0"
 }
+variable "key_name" {
+  type        = string
+  description = "EC2 key pair name for emergency SSH access"
+}
