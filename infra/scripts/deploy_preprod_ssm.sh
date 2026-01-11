@@ -14,49 +14,117 @@ DB_PASSWORD="${DB_PASSWORD:?}"
 echo "Deploying tag: ${TAG}"
 echo "Image dest: ${IMAGE_DEST}"
 
+get_instance_id() {
+  local target_name="$1"
+
+  local iid
+  iid="$(
+    aws ec2 describe-instances \
+      --region "${AWS_REGION}" \
+      --filters "Name=tag:Name,Values=${target_name}" "Name=instance-state-name,Values=running" \
+      --query "Reservations[0].Instances[0].InstanceId" \
+      --output text
+  )"
+
+  if [ -z "${iid}" ] || [ "${iid}" = "None" ]; then
+    echo "❌ No RUNNING EC2 instance found with tag Name=${target_name}"
+    echo "Tip: confirm the tag exists and the instance is running in ${AWS_REGION}."
+    exit 1
+  fi
+
+  echo "${iid}"
+}
+
+# Wait until SSM has created at least one invocation record for this command+instance
+wait_for_invocation() {
+  local command_id="$1"
+  local instance_id="$2"
+  local target_name="$3"
+
+  echo "Waiting for SSM invocation to appear for ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..."
+
+  for _ in $(seq 1 30); do
+    local status
+    status="$(
+      aws ssm get-command-invocation \
+        --region "${AWS_REGION}" \
+        --command-id "${command_id}" \
+        --instance-id "${instance_id}" \
+        --query "Status" \
+        --output text 2>/dev/null || true
+    )"
+
+    # Once it exists, Status will be something like Pending/InProgress/Success/Failed/etc.
+    if [ -n "${status}" ] && [ "${status}" != "None" ]; then
+      echo "Invocation found (Status=${status})."
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  echo "❌ Timed out waiting for invocation to appear."
+  echo "Debug: list invocations for CommandId=${command_id}:"
+  aws ssm list-command-invocations \
+    --region "${AWS_REGION}" \
+    --command-id "${command_id}" \
+    --details \
+    --output json || true
+
+  exit 1
+}
+
 send() {
   local target_name="$1"
   shift
   local cmd="$*"
 
+  local instance_id
+  instance_id="$(get_instance_id "${target_name}")"
+  echo "Target ${target_name} -> ${instance_id}"
+
   # Turn the multi-line script into a JSON array: ["line1","line2",...]
   local commands_json
   commands_json="$(printf '%s\n' "$cmd" | jq -R . | jq -s .)"
 
-  aws ssm send-command \
-    --region "${AWS_REGION}" \
-    --document-name "AWS-RunShellScript" \
-    --targets "Key=tag:Name,Values=${target_name}" \
-    --parameters "{\"commands\": ${commands_json}}" \
-    --comment "student-reg-app preprod deploy ${TAG}" \
-    --output text \
-    --query "Command.CommandId"
+  local command_id
+  command_id="$(
+    aws ssm send-command \
+      --region "${AWS_REGION}" \
+      --document-name "AWS-RunShellScript" \
+      --instance-ids "${instance_id}" \
+      --parameters "{\"commands\": ${commands_json}}" \
+      --comment "student-reg-app preprod deploy ${TAG}" \
+      --output text \
+      --query "Command.CommandId"
+  )"
+
+  # Return "command_id instance_id" so caller can wait correctly
+  echo "${command_id} ${instance_id}"
 }
 
 wait_cmd() {
   local command_id="$1"
-  local target_name="$2"
+  local instance_id="$2"
+  local target_name="$3"
 
-  echo "Waiting for ${target_name} (CommandId=${command_id})..."
-  # Wait until SSM reports the command has completed on the target.
+  wait_for_invocation "${command_id}" "${instance_id}" "${target_name}"
+
+  echo "Waiting for completion: ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..."
   aws ssm wait command-executed \
     --region "${AWS_REGION}" \
     --command-id "${command_id}" \
-    --instance-id "$(
-      aws ec2 describe-instances \
-        --region "${AWS_REGION}" \
-        --filters "Name=tag:Name,Values=${target_name}" "Name=instance-state-name,Values=running" \
-        --query "Reservations[0].Instances[0].InstanceId" \
-        --output text
-    )" || {
-      echo "Command failed or timed out for ${target_name}. Showing output:"
-      aws ssm list-command-invocations \
+    --instance-id "${instance_id}" || {
+      echo "❌ Command failed or timed out for ${target_name}. Showing output:"
+      aws ssm get-command-invocation \
         --region "${AWS_REGION}" \
         --command-id "${command_id}" \
-        --details \
-        --output json
+        --instance-id "${instance_id}" \
+        --output json || true
       exit 1
     }
+
+  echo "✅ ${target_name} completed."
 }
 
 login_cmd=$(cat <<EOF
@@ -117,18 +185,18 @@ EOF
 )
 
 echo "Sending Flyway..."
-CMD1=$(send "student-reg-app-pre-prod-flyway" "${flyway_cmd}")
+read -r CMD1 IID1 < <(send "student-reg-app-pre-prod-flyway" "${flyway_cmd}")
 echo "Flyway CommandId: ${CMD1}"
-wait_cmd "${CMD1}" "student-reg-app-pre-prod-flyway"
+wait_cmd "${CMD1}" "${IID1}" "student-reg-app-pre-prod-flyway"
 
 echo "Sending Backend..."
-CMD2=$(send "student-reg-app-pre-prod-backend" "${backend_cmd}")
+read -r CMD2 IID2 < <(send "student-reg-app-pre-prod-backend" "${backend_cmd}")
 echo "Backend CommandId: ${CMD2}"
-wait_cmd "${CMD2}" "student-reg-app-pre-prod-backend"
+wait_cmd "${CMD2}" "${IID2}" "student-reg-app-pre-prod-backend"
 
 echo "Sending Frontend..."
-CMD3=$(send "student-reg-app-pre-prod-frontend" "${frontend_cmd}")
+read -r CMD3 IID3 < <(send "student-reg-app-pre-prod-frontend" "${frontend_cmd}")
 echo "Frontend CommandId: ${CMD3}"
-wait_cmd "${CMD3}" "student-reg-app-pre-prod-frontend"
+wait_cmd "${CMD3}" "${IID3}" "student-reg-app-pre-prod-frontend"
 
 echo "✅ Preprod deploy completed."
