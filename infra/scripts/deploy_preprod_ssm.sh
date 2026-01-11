@@ -81,9 +81,8 @@ send() {
 
   local instance_id
   instance_id="$(get_instance_id "${target_name}")"
-  echo "Target ${target_name} -> ${instance_id}"
+  echo "Target ${target_name} -> ${instance_id}" >&2
 
-  # Turn the multi-line script into a JSON array: ["line1","line2",...]
   local commands_json
   commands_json="$(printf '%s\n' "$cmd" | jq -R . | jq -s .)"
 
@@ -97,9 +96,12 @@ send() {
       --comment "student-reg-app preprod deploy ${TAG}" \
       --output text \
       --query "Command.CommandId"
-  )"
+  )" || {
+    echo "❌ send-command failed for ${target_name} (${instance_id})" >&2
+    exit 1
+  }
 
-  # Return "command_id instance_id" so caller can wait correctly
+  # ONLY output these two fields on stdout:
   echo "${command_id} ${instance_id}"
 }
 

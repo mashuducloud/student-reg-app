@@ -1,8 +1,14 @@
 resource "aws_lb" "alb" {
   name               = "${var.project}-${var.env}-alb"
   load_balancer_type = "application"
-  subnets            = data.aws_subnets.default.ids
-  security_groups    = [aws_security_group.alb_sg.id]
+  internal           = false
+
+  # Use PUBLIC subnets (from network.tf)
+  subnets         = data.aws_subnets.public.ids
+  security_groups = [aws_security_group.alb_sg.id]
+
+  # Ensure IGW route exists before ALB is created
+  depends_on = [aws_route.default_internet_access]
 }
 
 # --- NEW: short names to satisfy AWS 32-char limit ---
@@ -78,9 +84,8 @@ resource "aws_lb_listener_rule" "api_to_backend" {
   }
 
   condition {
-  path_pattern {
-    values = ["/api/*"]
+    path_pattern {
+      values = ["/api/*"]
+    }
   }
-}
-
 }
