@@ -25,12 +25,18 @@ get_instance_id() {
       --filters \
         "Name=tag:Name,Values=${target_name}" \
         "Name=instance-state-name,Values=running" \
-      --query "Reservations[].Instances | sort_by(@,&LaunchTime) | [-1].InstanceId" \
+      --query "Reservations[].Instances[].InstanceId | [0]" \
       --output text
   )"
 
   if [ -z "${iid}" ] || [ "${iid}" = "None" ]; then
     echo "❌ No RUNNING EC2 instance found with tag Name=${target_name} in ${AWS_REGION}" >&2
+    echo "Debug: showing matching instances (any state):" >&2
+    aws ec2 describe-instances \
+      --region "${AWS_REGION}" \
+      --filters "Name=tag:Name,Values=${target_name}" \
+      --query "Reservations[].Instances[].{Id:InstanceId,State:State.Name,Name:Tags[?Key=='Name']|[0].Value,Launch:LaunchTime}" \
+      --output table || true
     exit 1
   fi
 
