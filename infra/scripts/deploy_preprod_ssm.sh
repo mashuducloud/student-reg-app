@@ -14,6 +14,7 @@ DB_PASSWORD="${DB_PASSWORD:?}"
 echo "Deploying tag: ${TAG}"
 echo "Image dest: ${IMAGE_DEST}"
 
+# Get the NEWEST RUNNING instance id with tag Name=<target_name>
 get_instance_id() {
   local target_name="$1"
 
@@ -21,21 +22,58 @@ get_instance_id() {
   iid="$(
     aws ec2 describe-instances \
       --region "${AWS_REGION}" \
-      --filters "Name=tag:Name,Values=${target_name}" "Name=instance-state-name,Values=running" \
-      --query "Reservations[0].Instances[0].InstanceId" \
+      --filters \
+        "Name=tag:Name,Values=${target_name}" \
+        "Name=instance-state-name,Values=running" \
+      --query "Reservations[].Instances | sort_by(@,&LaunchTime) | [-1].InstanceId" \
       --output text
   )"
 
   if [ -z "${iid}" ] || [ "${iid}" = "None" ]; then
-    echo "❌ No RUNNING EC2 instance found with tag Name=${target_name}"
-    echo "Tip: confirm the tag exists and the instance is running in ${AWS_REGION}."
+    echo "❌ No RUNNING EC2 instance found with tag Name=${target_name} in ${AWS_REGION}" >&2
     exit 1
   fi
 
   echo "${iid}"
 }
 
-# Wait until SSM has created at least one invocation record for this command+instance
+# Check if SSM sees the instance and it is Online
+ssm_is_online() {
+  local iid="$1"
+  local status
+  status="$(
+    aws ssm describe-instance-information \
+      --region "${AWS_REGION}" \
+      --filters "Key=InstanceIds,Values=${iid}" \
+      --query "InstanceInformationList[0].PingStatus" \
+      --output text 2>/dev/null || true
+  )"
+  [ "${status}" = "Online" ]
+}
+
+# Wait for instance to become SSM Online (up to ~5 minutes)
+wait_for_ssm_online() {
+  local iid="$1"
+  local target_name="$2"
+
+  echo "Waiting for SSM Online: ${target_name} (${iid})..."
+  for _ in $(seq 1 60); do
+    if ssm_is_online "${iid}"; then
+      echo "✅ SSM Online: ${target_name} (${iid})"
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "❌ Instance is RUNNING but not SSM Online: ${target_name} (${iid})" >&2
+  echo "Fix checklist:" >&2
+  echo "  - EC2 has IAM role with AmazonSSMManagedInstanceCore" >&2
+  echo "  - amazon-ssm-agent installed + running" >&2
+  echo "  - outbound internet (public IP + IGW route) OR VPC endpoints (ssm, ssmmessages, ec2messages)" >&2
+  exit 1
+}
+
+# Wait until SSM has created at least one invocation record for this command
 wait_for_invocation() {
   local command_id="$1"
   local instance_id="$2"
@@ -54,7 +92,6 @@ wait_for_invocation() {
         --output text 2>/dev/null || true
     )"
 
-    # Once it exists, Status will be something like Pending/InProgress/Success/Failed/etc.
     if [ -n "${status}" ] && [ "${status}" != "None" ]; then
       echo "Invocation found (Status=${status})."
       return 0
@@ -63,8 +100,8 @@ wait_for_invocation() {
     sleep 2
   done
 
-  echo "❌ Timed out waiting for invocation to appear."
-  echo "Debug: list invocations for CommandId=${command_id}:"
+  echo "❌ Timed out waiting for invocation to appear." >&2
+  echo "Debug: list invocations for CommandId=${command_id}:" >&2
   aws ssm list-command-invocations \
     --region "${AWS_REGION}" \
     --command-id "${command_id}" \
@@ -74,6 +111,7 @@ wait_for_invocation() {
   exit 1
 }
 
+# Send a command via SSM (targets by tag Name=...)
 send() {
   local target_name="$1"
   shift
@@ -83,15 +121,18 @@ send() {
   instance_id="$(get_instance_id "${target_name}")"
   echo "Target ${target_name} -> ${instance_id}" >&2
 
+  # Ensure SSM is actually online before we try to send commands
+  wait_for_ssm_online "${instance_id}" "${target_name}"
+
   local commands_json
-  commands_json="$(printf '%s\n' "$cmd" | jq -R . | jq -s .)"
+  commands_json="$(printf '%s\n' "${cmd}" | jq -R . | jq -s .)"
 
   local command_id
   command_id="$(
     aws ssm send-command \
       --region "${AWS_REGION}" \
       --document-name "AWS-RunShellScript" \
-      --instance-ids "${instance_id}" \
+      --targets "Key=tag:Name,Values=${target_name}" \
       --parameters "{\"commands\": ${commands_json}}" \
       --comment "student-reg-app preprod deploy ${TAG}" \
       --output text \
@@ -101,7 +142,7 @@ send() {
     exit 1
   }
 
-  # ONLY output these two fields on stdout:
+  # Output these two fields on stdout:
   echo "${command_id} ${instance_id}"
 }
 
@@ -117,7 +158,7 @@ wait_cmd() {
     --region "${AWS_REGION}" \
     --command-id "${command_id}" \
     --instance-id "${instance_id}" || {
-      echo "❌ Command failed or timed out for ${target_name}. Showing output:"
+      echo "❌ Command failed or timed out for ${target_name}. Showing output:" >&2
       aws ssm get-command-invocation \
         --region "${AWS_REGION}" \
         --command-id "${command_id}" \

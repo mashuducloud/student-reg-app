@@ -3,57 +3,75 @@ locals {
     #!/bin/bash
     set -euxo pipefail
 
-    dnf update -y
+    # Log to file + EC2 console
+    exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-    # Install Docker
-    dnf install -y docker
-    systemctl enable --now docker
+    echo "== user-data started =="
 
-    # Install + start SSM Agent (AL2023 safe)
-    dnf install -y amazon-ssm-agent || true
-    systemctl enable --now amazon-ssm-agent || true
+    # Make dnf more reliable (avoid hanging forever)
+    dnf -y clean all || true
+    dnf -y makecache --setopt=timeout=30 --setopt=retries=5 || true
 
-    # Quick status log (useful for debugging)
+    echo "== installing amazon-ssm-agent =="
+    dnf -y install amazon-ssm-agent --setopt=timeout=30 --setopt=retries=5
+
+    echo "== starting amazon-ssm-agent =="
+    systemctl enable --now amazon-ssm-agent
     systemctl status amazon-ssm-agent --no-pager || true
+
+    echo "== installing docker (optional, don’t block SSM) =="
+    dnf -y install docker --setopt=timeout=30 --setopt=retries=5 || true
+    systemctl enable --now docker || true
+
+    echo "== connectivity check =="
+    curl -IfsS https://ssm.us-east-1.amazonaws.com/ || true
+
+    echo "== user-data finished =="
   EOF
 }
 
+
 resource "aws_instance" "frontend" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.public.ids[0]
-  vpc_security_group_ids = [aws_security_group.frontend_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
-  user_data              = local.common_user_data
-  key_name               = var.key_name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = "t3.micro"
+  subnet_id                   = data.aws_subnets.public.ids[0]
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.frontend_sg.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
+  user_data                   = local.common_user_data
+  key_name                    = var.key_name
 
   tags = {
     Name = "${var.project}-${var.env}-frontend"
   }
 }
 
+
 resource "aws_instance" "backend" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.public.ids[0]
-  vpc_security_group_ids = [aws_security_group.backend_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
-  user_data              = local.common_user_data
-  key_name               = var.key_name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = "t3.micro"
+  subnet_id                   = data.aws_subnets.public.ids[1]
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.backend_sg.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
+  user_data                   = local.common_user_data
+  key_name                    = var.key_name
 
   tags = {
     Name = "${var.project}-${var.env}-backend"
   }
 }
 
+
 resource "aws_instance" "flyway" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.public.ids[0]
-  vpc_security_group_ids = [aws_security_group.flyway_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
-  user_data              = local.common_user_data
-  key_name               = var.key_name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = "t3.micro"
+  subnet_id                   = data.aws_subnets.public.ids[2]
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.flyway_sg.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
+  user_data                   = local.common_user_data
+  key_name                    = var.key_name
 
   tags = {
     Name = "${var.project}-${var.env}-flyway"
