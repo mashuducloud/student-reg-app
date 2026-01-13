@@ -11,10 +11,10 @@ DB_NAME="${DB_NAME:?}"
 DB_USER="${DB_USER:?}"
 DB_PASSWORD="${DB_PASSWORD:?}"
 
-echo "Deploying tag: ${TAG}"
-echo "Image dest: ${IMAGE_DEST}"
+echo "Deploying tag: ${TAG}" >&2
+echo "Image dest: ${IMAGE_DEST}" >&2
 
-# Get the NEWEST RUNNING instance id with tag Name=<target_name>
+# Get the first RUNNING instance id with tag Name=<target_name>
 get_instance_id() {
   local target_name="$1"
 
@@ -31,12 +31,6 @@ get_instance_id() {
 
   if [ -z "${iid}" ] || [ "${iid}" = "None" ]; then
     echo "❌ No RUNNING EC2 instance found with tag Name=${target_name} in ${AWS_REGION}" >&2
-    echo "Debug: showing matching instances (any state):" >&2
-    aws ec2 describe-instances \
-      --region "${AWS_REGION}" \
-      --filters "Name=tag:Name,Values=${target_name}" \
-      --query "Reservations[].Instances[].{Id:InstanceId,State:State.Name,Name:Tags[?Key=='Name']|[0].Value,Launch:LaunchTime}" \
-      --output table || true
     exit 1
   fi
 
@@ -62,10 +56,10 @@ wait_for_ssm_online() {
   local iid="$1"
   local target_name="$2"
 
-  echo "Waiting for SSM Online: ${target_name} (${iid})..."
+  echo "Waiting for SSM Online: ${target_name} (${iid})..." >&2
   for _ in $(seq 1 60); do
     if ssm_is_online "${iid}"; then
-      echo "✅ SSM Online: ${target_name} (${iid})"
+      echo "✅ SSM Online: ${target_name} (${iid})" >&2
       return 0
     fi
     sleep 5
@@ -79,13 +73,13 @@ wait_for_ssm_online() {
   exit 1
 }
 
-# Wait until SSM has created at least one invocation record for this command
+# Wait until SSM has created an invocation record for this command+instance
 wait_for_invocation() {
   local command_id="$1"
   local instance_id="$2"
   local target_name="$3"
 
-  echo "Waiting for SSM invocation to appear for ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..."
+  echo "Waiting for SSM invocation to appear for ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..." >&2
 
   for _ in $(seq 1 30); do
     local status
@@ -99,7 +93,7 @@ wait_for_invocation() {
     )"
 
     if [ -n "${status}" ] && [ "${status}" != "None" ]; then
-      echo "Invocation found (Status=${status})."
+      echo "Invocation found (Status=${status})." >&2
       return 0
     fi
 
@@ -117,7 +111,6 @@ wait_for_invocation() {
   exit 1
 }
 
-# Send a command via SSM (targets by tag Name=...)
 send() {
   local target_name="$1"
   shift
@@ -127,7 +120,6 @@ send() {
   instance_id="$(get_instance_id "${target_name}")"
   echo "Target ${target_name} -> ${instance_id}" >&2
 
-  # Ensure SSM is actually online before we try to send commands
   wait_for_ssm_online "${instance_id}" "${target_name}"
 
   local commands_json
@@ -141,14 +133,14 @@ send() {
       --targets "Key=tag:Name,Values=${target_name}" \
       --parameters "{\"commands\": ${commands_json}}" \
       --comment "student-reg-app preprod deploy ${TAG}" \
-      --output text \
-      --query "Command.CommandId"
+      --query "Command.CommandId" \
+      --output text
   )" || {
     echo "❌ send-command failed for ${target_name} (${instance_id})" >&2
     exit 1
   }
 
-  # Output these two fields on stdout:
+  # IMPORTANT: stdout must contain ONLY this line:
   echo "${command_id} ${instance_id}"
 }
 
@@ -159,7 +151,7 @@ wait_cmd() {
 
   wait_for_invocation "${command_id}" "${instance_id}" "${target_name}"
 
-  echo "Waiting for completion: ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..."
+  echo "Waiting for completion: ${target_name} (InstanceId=${instance_id}, CommandId=${command_id})..." >&2
   aws ssm wait command-executed \
     --region "${AWS_REGION}" \
     --command-id "${command_id}" \
@@ -173,7 +165,7 @@ wait_cmd() {
       exit 1
     }
 
-  echo "✅ ${target_name} completed."
+  echo "✅ ${target_name} completed." >&2
 }
 
 login_cmd=$(cat <<EOF
@@ -223,29 +215,37 @@ set -euo pipefail
 ${login_cmd}
 docker pull ${IMAGE_DEST}:student-frontend-${TAG}
 
-docker rm -f student-frontend || true
+docker rm -f student-frontend 2>/dev/null || true
 docker run -d --name student-frontend \
   --restart unless-stopped \
   -p 80:80 \
   ${IMAGE_DEST}:student-frontend-${TAG}
 
-curl -fsS http://127.0.0.1/ >/dev/null
+# Retry for up to ~60s without bash loops (SSM-safe)
+curl -fsS --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1/ >/dev/null || {
+  echo "❌ Frontend did not become healthy in time"
+  docker ps -a || true
+  docker logs --tail 200 student-frontend || true
+  exit 1
+}
+
+echo "✅ Frontend healthy"
 EOF
 )
 
-echo "Sending Flyway..."
+echo "Sending Flyway..." >&2
 read -r CMD1 IID1 < <(send "student-reg-app-pre-prod-flyway" "${flyway_cmd}")
-echo "Flyway CommandId: ${CMD1}"
+echo "Flyway CommandId: ${CMD1}" >&2
 wait_cmd "${CMD1}" "${IID1}" "student-reg-app-pre-prod-flyway"
 
-echo "Sending Backend..."
+echo "Sending Backend..." >&2
 read -r CMD2 IID2 < <(send "student-reg-app-pre-prod-backend" "${backend_cmd}")
-echo "Backend CommandId: ${CMD2}"
+echo "Backend CommandId: ${CMD2}" >&2
 wait_cmd "${CMD2}" "${IID2}" "student-reg-app-pre-prod-backend"
 
-echo "Sending Frontend..."
+echo "Sending Frontend..." >&2
 read -r CMD3 IID3 < <(send "student-reg-app-pre-prod-frontend" "${frontend_cmd}")
-echo "Frontend CommandId: ${CMD3}"
+echo "Frontend CommandId: ${CMD3}" >&2
 wait_cmd "${CMD3}" "${IID3}" "student-reg-app-pre-prod-frontend"
 
-echo "✅ Preprod deploy completed."
+echo "✅ Preprod deploy completed." >&2
