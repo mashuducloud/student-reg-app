@@ -73,6 +73,11 @@ resource "aws_instance" "flyway" {
   user_data                   = local.common_user_data
   key_name                    = var.key_name
 
+  root_block_device {
+  volume_size = 30
+  volume_type = "gp3"
+  }
+
   tags = {
     Name = "${var.project}-${var.env}-flyway"
   }
